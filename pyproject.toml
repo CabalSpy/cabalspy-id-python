@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cabalspy-id"
-version = "0.1.0"
-description = "Official SDK for CabalSpy ID, the verified social layer for crypto trading: Login with CabalSpy ID (OpenID Connect, PKCE, ID token verification), Data API for verified wallets, KOL badges and trading stats (PnL, win rate, holdings), live trade stream and webhook verification."
+version = "0.2.0"
+description = "Official SDK for CabalSpy ID, the verified social layer for crypto trading: Login with CabalSpy ID (OpenID Connect, PKCE, ID token verification), Data API for verified wallets, KOL badges and trading stats (PnL, win rate, holdings), token theses, live stream and webhook verification."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ keywords = [
   "cabalspy", "cabalspy-id", "csid", "login", "oidc", "openid-connect", "oauth2", "pkce",
   "sign-in", "socialfi", "identity", "verified-wallets", "wallet-verification", "kol",
   "kol-badge", "x-login", "twitter-login", "copy-trading", "leaderboard", "pnl", "win-rate",
-  "trading-stats", "webhooks", "standard-webhooks", "websocket", "solana", "base", "bnb",
+  "trading-stats", "token-theses", "thesis", "webhooks", "standard-webhooks", "websocket", "solana", "base", "bnb",
   "ethereum", "robinhood-chain", "sdk",
 ]
 classifiers = [

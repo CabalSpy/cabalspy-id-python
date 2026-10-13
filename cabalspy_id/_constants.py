@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.1.0"
+SDK_VERSION = "0.2.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -16,7 +16,14 @@ Period = Literal["6h", "1d", "7d", "30d"]
 LeaderboardSort = Literal["volume", "pnl", "pnl_usd", "win_rate", "trades"]
 Currency = Literal["SOL", "BNB", "ETH"]
 Scope = Literal["instance", "global"]
-OidcScope = Literal["openid", "profile", "wallets", "onchain", "offline_access"]
+#: ``thesis``: post theses and replies, react and report in the user's name.
+OidcScope = Literal["openid", "profile", "wallets", "onchain", "thesis", "offline_access"]
+ThesisStance = Literal["bull", "bear"]
+ThesisSort = Literal["new", "top"]
+ThesisEmoji = Literal["like", "🔥", "🚀", "💎", "👀", "😂", "🤝", "💀", "🐂", "🐻"]
+ThesisReportReason = Literal["spam", "scam", "abuse", "impersonation", "other"]
+#: ``trades``: your users' trades. ``theses``: new theses, replies, reactions, removals.
+StreamTopic = Literal["trades", "theses"]
 
 #: solana, bnb (BNB Chain), base, eth (Ethereum), rh (Robinhood Chain)
 CHAINS: tuple[Chain, ...] = ("solana", "bnb", "base", "eth", "rh")
@@ -39,5 +46,15 @@ WEBHOOK_EVENTS: tuple[str, ...] = (
     "profile.updated",
     "kol.granted",
     "consent.revoked",
+    "thesis.created",
     "webhook.test",
 )
+
+#: Reactions: "like" plus a fixed emoji set.
+THESIS_EMOJIS: tuple[str, ...] = ("like", "🔥", "🚀", "💎", "👀", "😂", "🤝", "💀", "🐂", "🐻")
+THESIS_REPORT_REASONS: tuple[str, ...] = ("spam", "scam", "abuse", "impersonation", "other")
+#: Maximum thesis / reply length in characters.
+THESIS_MAX_BODY = 1000
+STREAM_TOPICS: tuple[str, ...] = ("trades", "theses")
+DEFAULT_THESIS_URL = "https://id.cabalspy.xyz/thesis/v1"
+DEFAULT_THESIS_WS_URL = "wss://id.cabalspy.xyz/thesis/v1/ws"

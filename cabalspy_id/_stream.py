@@ -29,11 +29,11 @@ import contextlib
 import inspect
 import json
 import random
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, TypeVar, overload
 from urllib.parse import urlencode
 
-from ._constants import CHAINS
+from ._constants import CHAINS, STREAM_TOPICS
 from ._errors import (
     APIConnectionError,
     BadRequestError,
@@ -51,16 +51,36 @@ Handler = Callable[[Any], Any]
 H = TypeVar("H", bound=Callable[[Any], Any])
 
 #: Events: trade, subscribed, heartbeat, pong, open, close, reconnecting, error, message.
-STREAM_EVENTS = ("trade", "subscribed", "heartbeat", "pong", "open", "close", "reconnecting", "error", "message")
+#: Thesis events (open the stream with ``events=["theses"]``).
+THESIS_EVENTS = ("thesis", "thesis.reply", "thesis.reaction", "thesis.removed")
+STREAM_EVENTS = (
+    "trade",
+    *THESIS_EVENTS,
+    "subscribed",
+    "heartbeat",
+    "pong",
+    "open",
+    "close",
+    "reconnecting",
+    "error",
+    "message",
+)
 
 #: Server error codes that will not go away by reconnecting.
 FATAL_CODES = frozenset(
-    {"invalid_api_key", "plan_required", "invalid_parameter", "scope_not_allowed", "product_not_enabled"}
+    {
+        "invalid_api_key",
+        "plan_required",
+        "invalid_parameter",
+        "missing_parameter",
+        "scope_not_allowed",
+        "product_not_enabled",
+    }
 )
 
 
 def _stream_error(code: str, message: str) -> CabalSpyIDError:
-    if code == "invalid_parameter":
+    if code in ("invalid_parameter", "missing_parameter"):
         return BadRequestError(message, code=code, status=400)
     if code == "too_many_connections":
         return RateLimitError(message, code=code, status=429)
@@ -77,7 +97,9 @@ class CabalSpyIDStream:
         url: str,
         api_key: str,
         *,
+        events: Sequence[str] | None = None,
         blockchain: str | None = None,
+        mint: str | None = None,
         scope: str | None = None,
         instance: str | None = None,
         reconnect: bool = True,
@@ -95,7 +117,23 @@ class CabalSpyIDStream:
                 parameter="blockchain",
                 allowed=list(CHAINS),
             )
-        query = {"blockchain": blockchain, "scope": scope, "instance": instance}
+        topics = list(dict.fromkeys(events)) if events is not None else None
+        if topics is not None and (not topics or any(t not in STREAM_TOPICS for t in topics)):
+            raise BadRequestError(
+                "events must contain 'trades' and/or 'theses'",
+                code="invalid_parameter",
+                parameter="events",
+                allowed=list(STREAM_TOPICS),
+            )
+        if mint and not blockchain:
+            raise BadRequestError("mint needs blockchain", code="missing_parameter", parameter="blockchain")
+        query = {
+            "events": ",".join(topics) if topics else None,
+            "blockchain": blockchain,
+            "mint": mint,
+            "scope": scope,
+            "instance": instance,
+        }
         extra = {k: v for k, v in query.items() if v}
         self._url = f"{url}?{urlencode({'api_key': api_key, **extra})}"
         #: The URL with the key masked, safe to log.
@@ -232,6 +270,8 @@ class CabalSpyIDStream:
             await self._emit("subscribed", data)
             if not subscribed.done():
                 subscribed.set_result(data)
+        elif event in THESIS_EVENTS:
+            await self._emit(str(event), message.get("data"))
         elif event == "heartbeat":
             await self._emit("heartbeat", {"ts": message.get("ts")})
         elif event == "pong":
@@ -299,22 +339,37 @@ class CabalSpyIDStream:
         self._done.set()
 
     async def __aenter__(self) -> CabalSpyIDStream:
-        # Trades that arrive between connecting and the first ``async for``
-        # are kept for that loop.
+        # Events that arrive between connecting and the first loop are kept for it.
         self._backlog = []
-        self.on("trade", self._backlog.append)
+        for name in ("trade", *THESIS_EVENTS):
+            self.on(name, self._backlog_handler(name))
         try:
             await self.connect()
         except BaseException:
-            self.off("trade", self._backlog.append)
-            self._backlog = None
+            self._drop_backlog()
             raise
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.close()
 
-    async def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+    def _backlog_handler(self, name: str) -> Handler:
+        def keep(data: Any) -> None:
+            if self._backlog is not None:
+                self._backlog.append((name, data))
+
+        keep.__csid_backlog__ = True  # type: ignore[attr-defined]
+        return keep
+
+    def _drop_backlog(self) -> list[Any]:
+        backlog, self._backlog = self._backlog or [], None
+        for name in ("trade", *THESIS_EVENTS):
+            self._handlers[name] = [
+                h for h in self._handlers.get(name, []) if not getattr(h, "__csid_backlog__", False)
+            ]
+        return backlog
+
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
         """Iterates over trades; connects if needed.
 
         Ends when :meth:`close` is called, or raises the fatal error that
@@ -322,16 +377,27 @@ class CabalSpyIDStream:
         ``async with csid.stream() as stream: async for trade in stream: ...``
         or call :meth:`close`.
         """
+        return self._iterate(("trade",), lambda _name, data: data)
+
+    def theses(self) -> AsyncIterator[dict[str, Any]]:
+        """Iterates over thesis events as ``{"event": ..., "data": ...}``.
+
+        Events: ``thesis``, ``thesis.reply``, ``thesis.reaction``,
+        ``thesis.removed``. Open the stream with ``events=["theses"]``.
+        """
+        return self._iterate(THESIS_EVENTS, lambda name, data: {"event": name, "data": data})
+
+    async def _iterate(self, names: tuple[str, ...], wrap: Callable[[str, Any], Any]) -> AsyncIterator[Any]:
         queue: asyncio.Queue[Any] = asyncio.Queue()
         stop = object()
-        backlog, self._backlog = self._backlog, None
-        if backlog is not None:
-            self.off("trade", backlog.append)
-            for trade in backlog:
-                queue.put_nowait(trade)
+        for name, data in self._drop_backlog():
+            if name in names:
+                queue.put_nowait(wrap(name, data))
 
-        def on_trade(trade: Any) -> None:
-            queue.put_nowait(trade)
+        def listener(name: str) -> Handler:
+            return lambda data: queue.put_nowait(wrap(name, data))
+
+        listeners = [(name, listener(name)) for name in names]
 
         def on_error(_exc: Any) -> None:
             if self._fatal:
@@ -341,7 +407,8 @@ class CabalSpyIDStream:
             if self._closed or not self.reconnect:
                 queue.put_nowait(stop)
 
-        self.on("trade", on_trade)
+        for name, fn in listeners:
+            self.on(name, fn)
         self.on("error", on_error)
         self.on("close", on_close)
         owns = self._ws is None
@@ -356,7 +423,8 @@ class CabalSpyIDStream:
                     return
                 yield item
         finally:
-            self.off("trade", on_trade)
+            for name, fn in listeners:
+                self.off(name, fn)
             self.off("error", on_error)
             self.off("close", on_close)
             if owns and not self._closed:

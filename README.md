@@ -18,6 +18,7 @@ pip install "cabalspy-id[stream]"
 |---|---|
 | `CabalSpyIDAuth` / `AsyncCabalSpyIDAuth` | OpenID Connect for your server: PKCE, code exchange, refresh, revoke, userinfo, ID token verification (ES256 / JWKS) |
 | `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream |
+| `ThesisClient` / `AsyncThesisClient` | public token thesis API with a user's access token, plus `live()` updates |
 | `verify_webhook` | Standard Webhooks signature verification |
 
 Sync and async, fully typed (`py.typed`, `TypedDict` responses). Python 3.10+.
@@ -75,7 +76,7 @@ else:
 | `verify_id_token(id_token, nonce=, max_age=)` | ES256 signature via JWKS, iss, aud, azp, exp, iat, nonce |
 | `verify_access_token(access_token)` | for access tokens your frontend sends to your API (`typ: at+jwt`) |
 
-`AsyncCabalSpyIDAuth` has the same methods as coroutines. Scopes: `openid` `profile` `wallets` `onchain` `offline_access`. Client authentication: `client_secret_basic` (default with a secret), `client_secret_post`, `none`. Access and ID tokens live 15 minutes; refresh tokens 30 days of inactivity, 90 days absolute.
+`AsyncCabalSpyIDAuth` has the same methods as coroutines. Scopes: `openid` `profile` `wallets` `onchain` `thesis` `offline_access` (`thesis`: post theses and replies, react and report in the user's name). Client authentication: `client_secret_basic` (default with a secret), `client_secret_post`, `none`. Access and ID tokens live 15 minutes; refresh tokens 30 days of inactivity, 90 days absolute.
 
 **Browser apps** (public clients) let the widget run PKCE itself; it hands your page an `idToken`. Send it to your backend and verify it there:
 
@@ -186,6 +187,75 @@ except RateLimitError as err:
 
 `429`, `5xx` and network errors are retried with exponential backoff (default 2 retries); `Retry-After` wins. The rate limit of the last call is in `csid.last_rate_limit` (`X-RateLimit-Limit/Remaining/Reset`).
 
+## Token theses
+
+A thesis is a short opinion on a token (up to 1000 characters), optionally tagged bull or bear. **Only holders post theses**: one of the author's verified wallets bought the token and still holds it. Every thesis shows the author's real position — what they bought when posting and their live PnL now (or "sold"); authors who keep their trading private show only that they hold. Anyone signed in can reply and react (`like` plus 🔥 🚀 💎 👀 😂 🤝 💀 🐂 🐻). The same theses appear in the widget, through the Data API and on every platform.
+
+Writing needs the scope **`thesis`** in your login (`scope=["openid", "profile", "thesis"]`).
+
+### Widget
+
+```html
+<div data-csid-thesis data-chain="solana" data-mint="..." data-theme="dark"></div>
+<script src="https://id.cabalspy.xyz/widget.js" async></script>
+<script>CSID.thesis.setAccessToken(accessToken)  // optional: the signed-in person writes right away</script>
+```
+
+### Data API (server to server)
+
+Reading works with any key, for every token and user. Writing happens **in the name of one of your users**: pass their `csid_id` (the `sub` of their ID token); they must have signed in to your app with the scope `thesis` and be within your plan's user limit.
+
+```python
+theses = csid.list_theses(blockchain="solana", mint=mint, sort="new")
+counts = csid.thesis_summary(blockchain="solana", mint=mint)  # theses, bull, bear, authors, token
+
+ok = csid.thesis_eligibility(blockchain="solana", mint=mint, csid_id=claims["sub"])
+if ok["can_post"]:
+    t = csid.post_thesis(blockchain="solana", mint=mint, body="Accumulating here.", stance="bull", csid_id=claims["sub"])
+```
+
+| Method | Endpoint |
+|---|---|
+| `list_theses(blockchain=, mint=, sort=, stance=, limit=, cursor=, csid_id=)` / `iter_theses()` | `GET /v1/theses` |
+| `thesis_summary(blockchain=, mint=)` | `GET /v1/theses/summary` |
+| `thesis(id, csid_id=)` | `GET /v1/theses/item` |
+| `thesis_replies(id, limit=, cursor=)` / `iter_thesis_replies()` | `GET /v1/theses/replies` |
+| `latest_theses(blockchain=, users="all" \| "instance", limit=, cursor=)` | `GET /v1/theses/latest` |
+| `user_theses(csid_id= \| username=)` | `GET /v1/theses/user` |
+| `thesis_eligibility(blockchain=, mint=, csid_id=)` | `GET /v1/theses/eligibility` |
+| `post_thesis(blockchain=, mint=, body=, stance=, csid_id=)` | `POST /v1/theses` |
+| `reply_to_thesis(thesis_id=, body=, csid_id=)` | `POST /v1/theses/replies` |
+| `react_to_thesis(thesis_id=, emoji=, on=, csid_id=)` | `POST /v1/theses/reactions` |
+| `report_thesis(thesis_id=, reason=, note=, csid_id=)` | `POST /v1/theses/report` |
+| `delete_thesis(thesis_id=, csid_id=)` | `POST /v1/theses/delete` |
+
+Thesis error codes: `not_a_holder`, `consent_required`, `scope_missing`, `plan_user_limit` (`PlanUserLimitError`), `posting_paused`, `sandbox_user` (403, `PermissionError`); `invalid_body`, `duplicate` (400); `not_found` (404); `rate_limited` (429). Writes are never retried after a server or network error, so a post can't be duplicated; only the API's own rate limit is retried.
+
+Live over the stream: `csid.stream(events=["theses"], blockchain="solana", mint=mint)` emits `thesis`, `thesis.reply`, `thesis.reaction` and `thesis.removed` (or iterate `stream.theses()`). New theses of your users also arrive as the webhook `thesis.created` (`event["data"]["thesis"]`).
+
+### Public thesis API: `ThesisClient`
+
+`https://id.cabalspy.xyz/thesis/v1` needs no API key: reading is open, writing uses the user's access token (scope `thesis`).
+
+```python
+from cabalspy_id import ThesisClient
+
+with ThesisClient(access_token=result.tokens["access_token"]) as theses:
+    page = theses.list("solana", mint, sort="top")     # items, pagination, token, summary
+    if theses.me("solana", mint)["can_post"]:
+        theses.post("solana", mint, body="Strong community, still early.", stance="bull")
+    theses.react(page.items[0]["id"], "🚀")
+```
+
+Methods: `list`, `iterate`, `summary`, `get`, `replies`, `by_user`, `me`, `post`, `reply`, `react`, `report`, `delete`, `live`, `set_access_token`. `AsyncThesisClient` has the same methods as coroutines. Live updates for one token (async):
+
+```python
+live = ThesisClient().live("solana", mint)
+live.on("thesis", lambda t: print("new", t["body"]))   # also: reply, reaction, removed
+await live.connect()
+await live.run_forever()
+```
+
 ## Live stream
 
 Every trade of your users the moment it is indexed, with the trader's profile (Pro plan and up). Async only, needs `pip install "cabalspy-id[stream]"`.
@@ -193,6 +263,7 @@ Every trade of your users the moment it is indexed, with the trader's profile (P
 ```python
 async with AsyncCabalSpyID() as csid:
     stream = csid.stream(blockchain="solana")  # omit blockchain for every chain
+    # events=["trades"] (default), ["theses"] or both; mint= theses of one token
 
     @stream.on("trade")
     def on_trade(t):
@@ -207,11 +278,11 @@ async with AsyncCabalSpyID() as csid:
             print(trade)
 ```
 
-The server sends a heartbeat every 30 seconds. The client reconnects with exponential backoff after a dropped connection or when heartbeats stop; configuration errors (`invalid_api_key`, `plan_required`, `scope_not_allowed`) are fatal and stop reconnecting. Events: `trade`, `subscribed`, `heartbeat`, `open`, `close`, `reconnecting`, `error`; handlers may be sync or async.
+The server sends a heartbeat every 30 seconds. The client reconnects with exponential backoff after a dropped connection or when heartbeats stop; configuration errors (`invalid_api_key`, `plan_required`, `scope_not_allowed`) are fatal and stop reconnecting. Events: `trade`, `thesis`, `thesis.reply`, `thesis.reaction`, `thesis.removed`, `subscribed`, `heartbeat`, `open`, `close`, `reconnecting`, `error`; handlers may be sync or async.
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked` — only for users within the plan's limit.
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created` — only for users within the plan's limit.
 
 ```python
 from cabalspy_id import verify_webhook

@@ -4,6 +4,24 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-13
+
+### Added
+
+- Token theses in the Data API (sync and async): `list_theses` / `iter_theses`, `thesis_summary`,
+  `thesis`, `thesis_replies` / `iter_thesis_replies`, `latest_theses`, `user_theses`,
+  `thesis_eligibility`, and writes in a user's name: `post_thesis`, `reply_to_thesis`,
+  `react_to_thesis`, `report_thesis`, `delete_thesis`. `TypedDict`s `Thesis`, `ThesisPosition`,
+  `ThesisSummary`, `ThesisEligibility`, `ThesisReactions`.
+- `post_raw`. Writes are only retried after the API's own rate limit (`rate_limit_exceeded`),
+  never after a server or network error.
+- Stream: `events=["trades", "theses"]` and `mint=`; events `thesis`, `thesis.reply`,
+  `thesis.reaction`, `thesis.removed`; `stream.theses()` iterator.
+- `ThesisClient` / `AsyncThesisClient` for the public thesis API
+  (`https://id.cabalspy.xyz/thesis/v1`) with a user's access token, and `ThesisLive` (`.live()`)
+  for the public per-token websocket.
+- Webhook type `thesis.created`, OAuth scope `thesis`.
+
 ## [0.1.0] - 2026-10-13
 
 First release.
@@ -27,4 +45,5 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.2.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CabalSpy/cabalspy-id-python/releases/tag/v0.1.0

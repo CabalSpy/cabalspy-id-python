@@ -85,3 +85,36 @@ def test_discovery_and_jwks() -> None:
 
         req = auth.create_authorization_url()
         assert req.url.startswith("https://id.cabalspy.xyz/oauth/authorize?")
+
+
+WSOL = "So11111111111111111111111111111111111111112"
+
+
+def test_public_theses() -> None:
+    from cabalspy_id import BadRequestError, ThesisClient
+
+    with ThesisClient() as tc:
+        page = tc.list("solana", WSOL, limit=2)
+        assert isinstance(page.items, list)
+        assert page.token["mint"] == WSOL
+        assert isinstance(page.summary["theses"], int)
+        assert tc.summary("solana", WSOL)["token"]["mint"] == WSOL
+        with pytest.raises(BadRequestError):
+            tc.summary("solana", "not-a-mint")
+    with ThesisClient("not-a-token") as tc, pytest.raises(AuthenticationError):
+        tc.me("solana", WSOL)
+
+
+def test_data_api_theses_needs_a_key() -> None:
+    with CabalSpyID("") as csid, pytest.raises(AuthenticationError):
+        csid.get_raw("/theses", {"blockchain": "solana", "mint": WSOL}, auth=False)
+
+
+async def test_public_live_socket_opens() -> None:
+    from cabalspy_id import AsyncThesisClient
+
+    async with AsyncThesisClient() as tc:
+        live = tc.live("solana", WSOL, reconnect=False)
+        await live.connect()
+        assert live.connected
+        await live.close()

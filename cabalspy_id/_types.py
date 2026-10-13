@@ -553,3 +553,98 @@ class WebhookEvent(TypedDict):
     sandbox: bool
     #: Always carries "sub" (the user's CabalSpy ID), except for webhook.test.
     data: dict[str, Any]
+
+
+# ── token theses ─────────────────────────────────────────────────────────────
+
+
+class ThesisAuthor(TypedDict):
+    csid_id: str
+    username: str | None
+    name: str | None
+    image_url: str | None
+    kol_badge: bool
+    profile_url: str | None
+
+
+class ThesisPnl(TypedDict, total=False):
+    invested_usd: float
+    realized_usd: float
+    holding_value_usd: float | None
+    pnl_usd: float | None
+    pnl_percent: float | None
+    tokens_held: float | None
+    #: at_post only
+    first_buy: str | None
+    #: now only: "holding" or "sold"
+    status: Literal["holding", "sold"]
+
+
+class ThesisPosition(TypedDict, total=False):
+    """The author's real position. ``{"private": True}`` when they keep trading private."""
+
+    #: What was bought and sold when the thesis was posted.
+    at_post: ThesisPnl
+    #: Live PnL now, and whether the author still holds or sold.
+    now: ThesisPnl | None
+    private: bool
+
+
+class Thesis(TypedDict, total=False):
+    """A thesis (``kind == "thesis"``) or a reply to one (``kind == "reply"``)."""
+
+    id: str
+    chain: Chain
+    mint: str
+    kind: Literal["thesis", "reply"]
+    parent_id: str | None
+    body: str
+    stance: Literal["bull", "bear"] | None
+    author: ThesisAuthor
+    likes: int
+    replies: int
+    #: Count per reaction, e.g. {"like": 3, "🚀": 1}.
+    reactions: dict[str, int]
+    #: The viewer's own reactions (pass csid_id / an access token).
+    my_reactions: list[str]
+    #: Name of the app it was posted through.
+    via: str | None
+    created_at: str
+    is_mine: bool
+    #: Theses only (not replies).
+    position: ThesisPosition
+    #: Stream payloads only.
+    blockchain: Chain
+
+
+class ThesisToken(TypedDict):
+    chain: Chain
+    mint: str
+    name: str | None
+    symbol: str | None
+    logo: str | None
+    price_usd: float | None
+
+
+class ThesisSummary(TypedDict):
+    theses: int
+    bull: int
+    bear: int
+    authors: int
+    token: ThesisToken
+
+
+class ThesisEligibility(TypedDict, total=False):
+    #: Holders only: one of the user's verified wallets bought and still holds the token.
+    can_post: bool
+    can_reply: bool
+    holder: bool | None
+    #: Posting paused after several hidden posts.
+    paused: bool
+    #: Data API: why the user can't write through your app.
+    reason: str
+
+
+class ThesisReactions(TypedDict):
+    id: str
+    reactions: dict[str, int]

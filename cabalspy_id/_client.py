@@ -15,8 +15,8 @@ import asyncio
 import os
 import random
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
@@ -27,11 +27,18 @@ from ._constants import (
     LEADERBOARD_SORTS,
     PERIODS,
     SCOPES,
+    THESIS_EMOJIS,
+    THESIS_REPORT_REASONS,
     USER_AGENT,
     Chain,
     LeaderboardSort,
     Period,
     Scope,
+    StreamTopic,
+    ThesisEmoji,
+    ThesisReportReason,
+    ThesisSort,
+    ThesisStance,
 )
 from ._errors import (
     APIConnectionError,
@@ -127,6 +134,34 @@ def _wallet(blockchain: Any, address: Any) -> None:
     _required(address, "address")
 
 
+def _token(blockchain: Any, mint: Any) -> None:
+    _required(blockchain, "blockchain")
+    _one_of(blockchain, CHAINS, "blockchain")
+    _required(mint, "mint")
+
+
+def _theses_query(
+    blockchain: Any, mint: Any, sort: Any, stance: Any, limit: Any, cursor: Any, csid_id: Any
+) -> dict[str, Any]:
+    _token(blockchain, mint)
+    _one_of(sort, ("new", "top"), "sort")
+    _one_of(stance, ("bull", "bear"), "stance")
+    return {
+        "blockchain": blockchain,
+        "mint": mint,
+        "sort": sort,
+        "stance": stance,
+        "limit": limit,
+        "cursor": cursor,
+        "csid_id": csid_id,
+    }
+
+
+def _post_retryable(exc: CabalSpyIDError) -> bool:
+    """Writes are retried only when the API's rate limit refused them before they ran."""
+    return isinstance(exc, RateLimitError) and exc.code == "rate_limit_exceeded"
+
+
 def _page_pagination(page: Envelope) -> dict[str, Any] | None:
     """Envelope-level pagination, or the leaderboard's inside ``data``."""
     inner = page.data.get("pagination") if isinstance(page.data, dict) else None
@@ -140,6 +175,9 @@ def _page_pagination(page: Envelope) -> dict[str, Any] | None:
 
 class _Endpoints:
     def _get(self, path: str, params: Mapping[str, Any] | None = None, *, auth: bool = True) -> Any:  # pragma: no cover
+        raise NotImplementedError
+
+    def _post(self, path: str, body: Mapping[str, Any]) -> Any:  # pragma: no cover
         raise NotImplementedError
 
     # ── account ──────────────────────────────────────────────────────────
@@ -315,6 +353,148 @@ class _Endpoints:
         _one_of(blockchain, CHAINS, "blockchain")
         return self._get("/transactions/latest", {"blockchain": blockchain, "limit": limit, "scope": scope})
 
+    # ── theses ───────────────────────────────────────────────────────────
+    # Reading: theses are public; any key reads them, also outside its instance.
+
+    def list_theses(
+        self,
+        *,
+        blockchain: Chain,
+        mint: str,
+        sort: ThesisSort | None = None,
+        stance: ThesisStance | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        csid_id: str | None = None,
+    ) -> Any:
+        """GET /v1/theses — theses on a token, ``new`` or ``top`` first (``limit`` 1-50).
+
+        ``csid_id`` (a viewer) fills ``my_reactions`` and ``is_mine``.
+        Returns a list of :class:`~cabalspy_id.Thesis`.
+        """
+        return self._get("/theses", _theses_query(blockchain, mint, sort, stance, limit, cursor, csid_id))
+
+    def thesis_summary(self, *, blockchain: Chain, mint: str) -> Any:
+        """GET /v1/theses/summary — counts (theses, bull, bear, authors) and token info.
+
+        Returns :class:`~cabalspy_id.ThesisSummary`.
+        """
+        _token(blockchain, mint)
+        return self._get("/theses/summary", {"blockchain": blockchain, "mint": mint})
+
+    def thesis(self, id: str, *, csid_id: str | None = None) -> Any:
+        """GET /v1/theses/item — one thesis or reply. Returns :class:`~cabalspy_id.Thesis`."""
+        _required(id, "id")
+        return self._get("/theses/item", {"id": id, "csid_id": csid_id})
+
+    def thesis_replies(
+        self, id: str, *, limit: int | None = None, cursor: str | None = None, csid_id: str | None = None
+    ) -> Any:
+        """GET /v1/theses/replies — replies to a thesis (``limit`` 1-100)."""
+        _required(id, "id")
+        return self._get("/theses/replies", {"id": id, "limit": limit, "cursor": cursor, "csid_id": csid_id})
+
+    def latest_theses(
+        self,
+        *,
+        blockchain: Chain | None = None,
+        users: Literal["all", "instance"] | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        csid_id: str | None = None,
+    ) -> Any:
+        """GET /v1/theses/latest — newest theses on every token; ``users="instance"``: only your users'."""
+        _one_of(blockchain, CHAINS, "blockchain")
+        _one_of(users, ("all", "instance"), "users")
+        return self._get(
+            "/theses/latest",
+            {"blockchain": blockchain, "users": users, "limit": limit, "cursor": cursor, "csid_id": csid_id},
+        )
+
+    def user_theses(
+        self,
+        *,
+        csid_id: str | None = None,
+        username: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/theses/user — theses of one user, by ``csid_id`` or X ``username`` (exactly one)."""
+        if bool(csid_id) == bool(username):
+            raise BadRequestError(
+                "Pass exactly one of: csid_id, username.", code="missing_parameter", parameter="csid_id|username"
+            )
+        return self._get(
+            "/theses/user",
+            {
+                "csid_id": csid_id,
+                "username": username.lstrip("@") if username else None,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def thesis_eligibility(self, *, blockchain: Chain, mint: str, csid_id: str) -> Any:
+        """GET /v1/theses/eligibility — may this user post (holder, not paused) and reply here
+        through your app? ``reason`` says why not (consent_required, plan_user_limit, sandbox_user).
+
+        Returns :class:`~cabalspy_id.ThesisEligibility`.
+        """
+        _token(blockchain, mint)
+        _required(csid_id, "csid_id")
+        return self._get("/theses/eligibility", {"blockchain": blockchain, "mint": mint, "csid_id": csid_id})
+
+    # Writing happens in the name of one of your users: ``csid_id`` is the ``sub``
+    # of their ID token. They must have signed in with the scope "thesis".
+
+    def post_thesis(
+        self, *, blockchain: Chain, mint: str, body: str, csid_id: str, stance: ThesisStance | None = None
+    ) -> Any:
+        """POST /v1/theses — posts a thesis (up to 1000 characters). Holders only (``not_a_holder``)."""
+        _token(blockchain, mint)
+        _required(body, "body")
+        _required(csid_id, "csid_id")
+        _one_of(stance, ("bull", "bear"), "stance")
+        payload: dict[str, Any] = {"blockchain": blockchain, "mint": mint, "body": body, "csid_id": csid_id}
+        if stance:
+            payload["stance"] = stance
+        return self._post("/theses", payload)
+
+    def reply_to_thesis(self, *, thesis_id: str, body: str, csid_id: str) -> Any:
+        """POST /v1/theses/replies — replies to a thesis."""
+        _required(thesis_id, "thesis_id")
+        _required(body, "body")
+        _required(csid_id, "csid_id")
+        return self._post("/theses/replies", {"thesis_id": thesis_id, "body": body, "csid_id": csid_id})
+
+    def react_to_thesis(self, *, thesis_id: str, emoji: ThesisEmoji, csid_id: str, on: bool = True) -> Any:
+        """POST /v1/theses/reactions — adds (or with ``on=False`` removes) a reaction.
+
+        Returns ``{"id", "reactions"}`` with the new counts.
+        """
+        _required(thesis_id, "thesis_id")
+        _one_of(emoji, THESIS_EMOJIS, "emoji")
+        _required(csid_id, "csid_id")
+        return self._post("/theses/reactions", {"thesis_id": thesis_id, "emoji": emoji, "on": on, "csid_id": csid_id})
+
+    def report_thesis(
+        self, *, thesis_id: str, reason: ThesisReportReason, csid_id: str, note: str | None = None
+    ) -> Any:
+        """POST /v1/theses/report — reports a post (hidden for review after 3 reports)."""
+        _required(thesis_id, "thesis_id")
+        _one_of(reason, THESIS_REPORT_REASONS, "reason")
+        _required(csid_id, "csid_id")
+        payload: dict[str, Any] = {"thesis_id": thesis_id, "reason": reason, "csid_id": csid_id}
+        if note:
+            payload["note"] = note
+        return self._post("/theses/report", payload)
+
+    def delete_thesis(self, *, thesis_id: str, csid_id: str) -> Any:
+        """POST /v1/theses/delete — deletes the user's own thesis or reply."""
+        _required(thesis_id, "thesis_id")
+        _required(csid_id, "csid_id")
+        return self._post("/theses/delete", {"thesis_id": thesis_id, "csid_id": csid_id})
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIENTS
@@ -352,7 +532,7 @@ class _BaseClient(_Endpoints):
     # ── plumbing shared by both clients ──────────────────────────────────
 
     def _prepare(
-        self, path: str, params: Mapping[str, Any] | None, auth: bool
+        self, path: str, params: Mapping[str, Any] | None, auth: bool, json_body: bool = False
     ) -> tuple[str, dict[str, Any], dict[str, str]]:
         if auth and not self._api_key:
             raise AuthenticationError(
@@ -367,11 +547,13 @@ class _BaseClient(_Endpoints):
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
         if auth:
             headers["Authorization"] = f"Bearer {self._api_key}"
+        if json_body:
+            headers["Content-Type"] = "application/json"
         headers.update(self._extra_headers)
         url = f"{self.base_url}{path if path.startswith('/') else '/' + path}"
         return url, query, headers
 
-    def _interpret(self, response: httpx.Response, path: str) -> Envelope:
+    def _interpret(self, response: httpx.Response, path: str, method: str = "GET") -> Envelope:
         """Turns an HTTP response into an Envelope, or raises the right error."""
         rate_limit = RateLimit(
             _int_header(response.headers, "X-RateLimit-Limit"),
@@ -391,11 +573,11 @@ class _BaseClient(_Endpoints):
                 body if isinstance(body, dict) else None,
                 rate_limit,
                 _int_header(response.headers, "Retry-After"),
-                f"HTTP {response.status_code} on GET {path}",
+                f"HTTP {response.status_code} on {method} {path}",
             )
         if not isinstance(parsed, dict) or "data" not in parsed:
             raise InvalidResponseError(
-                f"Unexpected response shape on GET {path}: no data field",
+                f"Unexpected response shape on {method} {path}: no data field",
                 status=response.status_code,
                 code="invalid_response",
                 rate_limit=rate_limit,
@@ -404,19 +586,24 @@ class _BaseClient(_Endpoints):
             parsed["data"], parsed.get("pagination"), parsed.get("meta") or {}, rate_limit, response.status_code
         )
 
-    def _connection_error(self, exc: Exception, path: str) -> APIConnectionError:
+    def _connection_error(self, exc: Exception, path: str, method: str = "GET") -> APIConnectionError:
         if isinstance(exc, httpx.TimeoutException):
-            return APIConnectionError(f"Request timed out after {self.timeout}s: GET {path}", code="timeout")
+            return APIConnectionError(f"Request timed out after {self.timeout}s: {method} {path}", code="timeout")
         return APIConnectionError(f"Network error: {exc}", code="connection_error")
 
     def stream(
         self,
         *,
+        events: Sequence[StreamTopic] | None = None,
         blockchain: Chain | None = None,
+        mint: str | None = None,
         scope: Scope | None = None,
         **kwargs: Any,
     ) -> CabalSpyIDStream:
-        """Live trades of your users over WebSocket (Pro plan and up). Async only.
+        """Live trades of your users and/or live theses over WebSocket (Pro plan and up). Async only.
+
+        ``events``: ``["trades"]`` (default), ``["theses"]`` or both; ``mint``
+        limits theses to one token (needs ``blockchain``).
 
         Needs the ``stream`` extra: ``pip install "cabalspy-id[stream]"``.
         """
@@ -425,7 +612,14 @@ class _BaseClient(_Endpoints):
         from ._stream import CabalSpyIDStream
 
         return CabalSpyIDStream(
-            self.stream_url, self._api_key, blockchain=blockchain, scope=scope, instance=self.instance, **kwargs
+            self.stream_url,
+            self._api_key,
+            events=events,
+            blockchain=blockchain,
+            mint=mint,
+            scope=scope,
+            instance=self.instance,
+            **kwargs,
         )
 
 
@@ -478,6 +672,33 @@ class CabalSpyID(_BaseClient):
     def _get(self, path: str, params: Mapping[str, Any] | None = None, *, auth: bool = True) -> Any:
         return self.get_raw(path, params, auth=auth).data
 
+    def post_raw(self, path: str, body: Mapping[str, Any]) -> Envelope:
+        """Any POST with a JSON body, returning the full envelope.
+
+        Not retried after a server or network error (the write may have happened);
+        only the API's own rate limit (429 rate_limit_exceeded) is retried.
+        """
+        url, query, headers = self._prepare(path, None, True, json_body=True)
+        last: BaseException | None = None
+        for attempt in range(self.max_retries + 1):
+            if attempt:
+                time.sleep(_backoff(attempt, last))
+            try:
+                response = self._http.post(url, params=query, headers=headers, json=dict(body))
+            except httpx.HTTPError as exc:
+                raise self._connection_error(exc, path, "POST") from exc
+            try:
+                return self._interpret(response, path, "POST")
+            except CabalSpyIDError as exc:
+                if _post_retryable(exc) and attempt < self.max_retries:
+                    last = exc
+                    continue
+                raise
+        raise last or APIConnectionError(f"Request failed: POST {path}")
+
+    def _post(self, path: str, body: Mapping[str, Any]) -> Any:
+        return self.post_raw(path, body).data
+
     def pages(
         self, path: str, params: Mapping[str, Any] | None = None, *, max_pages: int | None = None
     ) -> Iterator[Envelope]:
@@ -511,6 +732,28 @@ class CabalSpyID(_BaseClient):
         _one_of(blockchain, CHAINS, "blockchain")
         for page in self.pages("/wallets/leaderboard", {"blockchain": blockchain, **params}):
             yield from page.data.get("leaderboard", [])
+
+    def iter_theses(
+        self,
+        *,
+        blockchain: Chain,
+        mint: str,
+        sort: ThesisSort | None = None,
+        stance: ThesisStance | None = None,
+        limit: int | None = None,
+        csid_id: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Every thesis on a token, following ``next_cursor``."""
+        for page in self.pages("/theses", _theses_query(blockchain, mint, sort, stance, limit, None, csid_id)):
+            yield from page.data
+
+    def iter_thesis_replies(
+        self, id: str, *, limit: int | None = None, csid_id: str | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Every reply of a thesis, following ``next_cursor``."""
+        _required(id, "id")
+        for page in self.pages("/theses/replies", {"id": id, "limit": limit, "csid_id": csid_id}):
+            yield from page.data
 
 
 class AsyncCabalSpyID(_BaseClient):
@@ -563,6 +806,29 @@ class AsyncCabalSpyID(_BaseClient):
     async def _get(self, path: str, params: Mapping[str, Any] | None = None, *, auth: bool = True) -> Any:
         return (await self.get_raw(path, params, auth=auth)).data
 
+    async def post_raw(self, path: str, body: Mapping[str, Any]) -> Envelope:
+        """Async version of :meth:`CabalSpyID.post_raw`."""
+        url, query, headers = self._prepare(path, None, True, json_body=True)
+        last: BaseException | None = None
+        for attempt in range(self.max_retries + 1):
+            if attempt:
+                await asyncio.sleep(_backoff(attempt, last))
+            try:
+                response = await self._http.post(url, params=query, headers=headers, json=dict(body))
+            except httpx.HTTPError as exc:
+                raise self._connection_error(exc, path, "POST") from exc
+            try:
+                return self._interpret(response, path, "POST")
+            except CabalSpyIDError as exc:
+                if _post_retryable(exc) and attempt < self.max_retries:
+                    last = exc
+                    continue
+                raise
+        raise last or APIConnectionError(f"Request failed: POST {path}")
+
+    async def _post(self, path: str, body: Mapping[str, Any]) -> Any:
+        return (await self.post_raw(path, body)).data
+
     async def pages(
         self, path: str, params: Mapping[str, Any] | None = None, *, max_pages: int | None = None
     ) -> AsyncIterator[Envelope]:
@@ -599,6 +865,30 @@ class AsyncCabalSpyID(_BaseClient):
         async for page in self.pages("/wallets/leaderboard", {"blockchain": blockchain, **params}):
             for entry in page.data.get("leaderboard", []):
                 yield entry
+
+    async def iter_theses(
+        self,
+        *,
+        blockchain: Chain,
+        mint: str,
+        sort: ThesisSort | None = None,
+        stance: ThesisStance | None = None,
+        limit: int | None = None,
+        csid_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every thesis on a token, following ``next_cursor``."""
+        async for page in self.pages("/theses", _theses_query(blockchain, mint, sort, stance, limit, None, csid_id)):
+            for item in page.data:
+                yield item
+
+    async def iter_thesis_replies(
+        self, id: str, *, limit: int | None = None, csid_id: str | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every reply of a thesis, following ``next_cursor``."""
+        _required(id, "id")
+        async for page in self.pages("/theses/replies", {"id": id, "limit": limit, "csid_id": csid_id}):
+            for item in page.data:
+                yield item
 
 
 def _users_query(params: Mapping[str, Any]) -> dict[str, Any]:

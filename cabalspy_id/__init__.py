@@ -1,7 +1,8 @@
 """CabalSpy ID — the verified social layer for crypto trading.
 
 Login with CabalSpy ID (OpenID Connect), the Data API for verified wallets, KOL
-badges and trading stats, the live trade stream and webhook verification.
+badges, trading stats and token theses, the live stream, the public thesis API
+and webhook verification.
 
     from cabalspy_id import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -20,10 +21,16 @@ from ._constants import (
     DEFAULT_BASE_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
+    DEFAULT_THESIS_URL,
+    DEFAULT_THESIS_WS_URL,
     LEADERBOARD_SORTS,
     PERIODS,
     SCOPES,
     SDK_VERSION,
+    STREAM_TOPICS,
+    THESIS_EMOJIS,
+    THESIS_MAX_BODY,
+    THESIS_REPORT_REASONS,
     WEBHOOK_EVENTS,
     Chain,
     Currency,
@@ -31,6 +38,11 @@ from ._constants import (
     OidcScope,
     Period,
     Scope,
+    StreamTopic,
+    ThesisEmoji,
+    ThesisReportReason,
+    ThesisSort,
+    ThesisStance,
 )
 from ._errors import (
     APIConnectionError,
@@ -57,6 +69,7 @@ from ._oidc import (
     generate_pkce,
     is_limited,
 )
+from ._thesis import AsyncThesisClient, ThesisClient, ThesisLive, ThesisPage, TokenThesesPage
 from ._types import (
     ActiveHoldings,
     ActiveTokens,
@@ -80,6 +93,14 @@ from ._types import (
     PnlChartPoint,
     Profile,
     ResponseMeta,
+    Thesis,
+    ThesisAuthor,
+    ThesisEligibility,
+    ThesisPnl,
+    ThesisPosition,
+    ThesisReactions,
+    ThesisSummary,
+    ThesisToken,
     TokenOverview,
     TokenResponse,
     TrackerResponse,
@@ -102,7 +123,7 @@ __version__ = SDK_VERSION
 
 def __getattr__(name: str) -> object:
     # The stream needs the optional websockets dependency; import it lazily.
-    if name in ("CabalSpyIDStream", "STREAM_EVENTS"):
+    if name in ("CabalSpyIDStream", "STREAM_EVENTS", "THESIS_EVENTS"):
         from . import _stream
 
         return getattr(_stream, name)
@@ -126,6 +147,11 @@ __all__ = [
     "verify_webhook",
     "sign_webhook",
     "HeaderSource",
+    "ThesisClient",
+    "AsyncThesisClient",
+    "ThesisLive",
+    "TokenThesesPage",
+    "ThesisPage",
     # errors
     "CabalSpyIDError",
     "BadRequestError",
@@ -150,6 +176,18 @@ __all__ = [
     "CURRENCY_BY_CHAIN",
     "WEBHOOK_EVENTS",
     "STREAM_EVENTS",
+    "THESIS_EVENTS",
+    "STREAM_TOPICS",
+    "THESIS_EMOJIS",
+    "THESIS_REPORT_REASONS",
+    "THESIS_MAX_BODY",
+    "DEFAULT_THESIS_URL",
+    "DEFAULT_THESIS_WS_URL",
+    "StreamTopic",
+    "ThesisStance",
+    "ThesisSort",
+    "ThesisEmoji",
+    "ThesisReportReason",
     "DEFAULT_BASE_URL",
     "DEFAULT_STREAM_URL",
     "DEFAULT_ISSUER",
@@ -196,4 +234,12 @@ __all__ = [
     "TokenResponse",
     "DiscoveryDocument",
     "WebhookEvent",
+    "Thesis",
+    "ThesisAuthor",
+    "ThesisPnl",
+    "ThesisPosition",
+    "ThesisToken",
+    "ThesisSummary",
+    "ThesisEligibility",
+    "ThesisReactions",
 ]
