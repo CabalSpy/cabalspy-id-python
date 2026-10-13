@@ -24,11 +24,13 @@ from ._constants import (
     CHAINS,
     DEFAULT_BASE_URL,
     DEFAULT_STREAM_URL,
+    DEFAULT_THESES_STREAM_URL,
     LEADERBOARD_SORTS,
     PERIODS,
     SCOPES,
     THESIS_EMOJIS,
     THESIS_REPORT_REASONS,
+    THESIS_SCOPES,
     USER_AGENT,
     Chain,
     LeaderboardSort,
@@ -37,6 +39,7 @@ from ._constants import (
     StreamTopic,
     ThesisEmoji,
     ThesisReportReason,
+    ThesisScope,
     ThesisSort,
     ThesisStance,
 )
@@ -54,6 +57,7 @@ from ._errors import (
 
 if TYPE_CHECKING:
     from ._stream import CabalSpyIDStream
+    from ._theses_stream import ThesesStream
 
 __all__ = ["CabalSpyID", "AsyncCabalSpyID", "Envelope"]
 
@@ -141,12 +145,14 @@ def _token(blockchain: Any, mint: Any) -> None:
 
 
 def _theses_query(
-    blockchain: Any, mint: Any, sort: Any, stance: Any, limit: Any, cursor: Any, csid_id: Any
+    blockchain: Any, mint: Any, sort: Any, stance: Any, limit: Any, cursor: Any, csid_id: Any, scope: Any = None
 ) -> dict[str, Any]:
     _token(blockchain, mint)
     _one_of(sort, ("new", "top"), "sort")
     _one_of(stance, ("bull", "bear"), "stance")
+    _one_of(scope, THESIS_SCOPES, "scope")
     return {
+        "scope": scope,
         "blockchain": blockchain,
         "mint": mint,
         "sort": sort,
@@ -366,21 +372,24 @@ class _Endpoints:
         limit: int | None = None,
         cursor: str | None = None,
         csid_id: str | None = None,
+        scope: ThesisScope | None = None,
     ) -> Any:
         """GET /v1/theses — theses on a token, ``new`` or ``top`` first (``limit`` 1-50).
 
-        ``csid_id`` (a viewer) fills ``my_reactions`` and ``is_mine``.
+        ``csid_id`` (a viewer) fills ``my_reactions`` and ``is_mine``. ``scope``:
+        ``global`` (default, every platform) or ``instance`` (written on your instance).
         Returns a list of :class:`~cabalspy_id.Thesis`.
         """
-        return self._get("/theses", _theses_query(blockchain, mint, sort, stance, limit, cursor, csid_id))
+        return self._get("/theses", _theses_query(blockchain, mint, sort, stance, limit, cursor, csid_id, scope))
 
-    def thesis_summary(self, *, blockchain: Chain, mint: str) -> Any:
+    def thesis_summary(self, *, blockchain: Chain, mint: str, scope: ThesisScope | None = None) -> Any:
         """GET /v1/theses/summary — counts (theses, bull, bear, authors) and token info.
 
         Returns :class:`~cabalspy_id.ThesisSummary`.
         """
         _token(blockchain, mint)
-        return self._get("/theses/summary", {"blockchain": blockchain, "mint": mint})
+        _one_of(scope, THESIS_SCOPES, "scope")
+        return self._get("/theses/summary", {"blockchain": blockchain, "mint": mint, "scope": scope})
 
     def thesis(self, id: str, *, csid_id: str | None = None) -> Any:
         """GET /v1/theses/item — one thesis or reply. Returns :class:`~cabalspy_id.Thesis`."""
@@ -402,13 +411,26 @@ class _Endpoints:
         limit: int | None = None,
         cursor: str | None = None,
         csid_id: str | None = None,
+        scope: ThesisScope | None = None,
     ) -> Any:
-        """GET /v1/theses/latest — newest theses on every token; ``users="instance"``: only your users'."""
+        """GET /v1/theses/latest — newest theses on every token.
+
+        ``users="instance"``: only your users' theses; ``scope="instance"``: only
+        theses written on your instance.
+        """
         _one_of(blockchain, CHAINS, "blockchain")
         _one_of(users, ("all", "instance"), "users")
+        _one_of(scope, THESIS_SCOPES, "scope")
         return self._get(
             "/theses/latest",
-            {"blockchain": blockchain, "users": users, "limit": limit, "cursor": cursor, "csid_id": csid_id},
+            {
+                "blockchain": blockchain,
+                "users": users,
+                "scope": scope,
+                "limit": limit,
+                "cursor": cursor,
+                "csid_id": csid_id,
+            },
         )
 
     def user_theses(
@@ -509,6 +531,7 @@ class _BaseClient(_Endpoints):
         instance: str | None = None,
         base_url: str | None = None,
         stream_url: str | None = None,
+        theses_stream_url: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 2,
         headers: Mapping[str, str] | None = None,
@@ -520,6 +543,7 @@ class _BaseClient(_Endpoints):
         self.instance = instance or _env("CABALSPY_ID_INSTANCE")
         self.base_url = (base_url or _env("CABALSPY_ID_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.stream_url = (stream_url or _env("CABALSPY_ID_STREAM_URL") or DEFAULT_STREAM_URL).rstrip("/")
+        self.theses_stream_url = (theses_stream_url or DEFAULT_THESES_STREAM_URL).rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self._extra_headers = dict(headers or {})
@@ -621,6 +645,17 @@ class _BaseClient(_Endpoints):
             instance=self.instance,
             **kwargs,
         )
+
+    def theses_stream(self, *, scope: ThesisScope | None = None, **kwargs: Any) -> ThesesStream:
+        """Live theses for the tokens you subscribe to (every plan). Async only.
+
+        Needs the ``stream`` extra: ``pip install "cabalspy-id[stream]"``.
+        """
+        if not self._api_key:
+            raise AuthenticationError("The theses stream needs an API key.", status=401, code="missing_api_key")
+        from ._theses_stream import ThesesStream
+
+        return ThesesStream(self.theses_stream_url, self._api_key, scope=scope, instance=self.instance, **kwargs)
 
 
 class CabalSpyID(_BaseClient):
@@ -742,9 +777,11 @@ class CabalSpyID(_BaseClient):
         stance: ThesisStance | None = None,
         limit: int | None = None,
         csid_id: str | None = None,
+        scope: ThesisScope | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Every thesis on a token, following ``next_cursor``."""
-        for page in self.pages("/theses", _theses_query(blockchain, mint, sort, stance, limit, None, csid_id)):
+        query = _theses_query(blockchain, mint, sort, stance, limit, None, csid_id, scope)
+        for page in self.pages("/theses", query):
             yield from page.data
 
     def iter_thesis_replies(
@@ -875,9 +912,11 @@ class AsyncCabalSpyID(_BaseClient):
         stance: ThesisStance | None = None,
         limit: int | None = None,
         csid_id: str | None = None,
+        scope: ThesisScope | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Every thesis on a token, following ``next_cursor``."""
-        async for page in self.pages("/theses", _theses_query(blockchain, mint, sort, stance, limit, None, csid_id)):
+        query = _theses_query(blockchain, mint, sort, stance, limit, None, csid_id, scope)
+        async for page in self.pages("/theses", query):
             for item in page.data:
                 yield item
 

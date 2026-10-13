@@ -193,10 +193,12 @@ A thesis is a short opinion on a token (up to 1000 characters), optionally tagge
 
 Writing needs the scope **`thesis`** in your login (`scope=["openid", "profile", "thesis"]`).
 
+**Scope of reads.** Theses are shared across platforms. Every read (`list_theses`, `thesis_summary`, `latest_theses`, `ThesisClient`, the widget, the live sockets) takes `scope`: `global` (default, every platform) or `instance` (only theses written on your instance). In the Data API your key decides the instance; the public API and widget need your `client_id`.
+
 ### Widget
 
 ```html
-<div data-csid-thesis data-chain="solana" data-mint="..." data-theme="dark"></div>
+<div data-csid-thesis data-chain="solana" data-mint="..." data-client-id="csid_..." data-theme="dark"></div>
 <script src="https://id.cabalspy.xyz/widget.js" async></script>
 <script>CSID.thesis.setAccessToken(accessToken)  // optional: the signed-in person writes right away</script>
 ```
@@ -231,7 +233,36 @@ if ok["can_post"]:
 
 Thesis error codes: `not_a_holder`, `consent_required`, `scope_missing`, `plan_user_limit` (`PlanUserLimitError`), `posting_paused`, `sandbox_user` (403, `PermissionError`); `invalid_body`, `duplicate` (400); `not_found` (404); `rate_limited` (429). Writes are never retried after a server or network error, so a post can't be duplicated; only the API's own rate limit is retried.
 
-Live over the stream: `csid.stream(events=["theses"], blockchain="solana", mint=mint)` emits `thesis`, `thesis.reply`, `thesis.reaction` and `thesis.removed` (or iterate `stream.theses()`). New theses of your users also arrive as the webhook `thesis.created` (`event["data"]["thesis"]`).
+With `data-client-id` the widget loads the design saved in the dashboard; `data-theme`, `data-scope`, `data-sort`, `data-font`, `data-radius`, `data-bg`, `data-card`, `data-text`, `data-muted`, `data-border`, `data-accent`, `data-accent-text`, `data-bull`, `data-bear`, `data-show-header`, `data-show-sentiment`, `data-compact` and `data-height` override it.
+
+### Theses stream (every plan)
+
+Live theses for the tokens you choose, e.g. to put markers on a chart. Up to 200 tokens per connection (or all), on every plan; subscriptions are sent again after every reconnect. Async, needs the `stream` extra.
+
+```python
+async with AsyncCabalSpyID() as csid:
+    ts = csid.theses_stream(scope="global")          # or "instance"
+
+    @ts.on("thesis")
+    def on_thesis(t):
+        add_marker(t["blockchain"], t["mint"], t)
+
+    await ts.connect()                               # returns on "ready"
+    await ts.subscribe([{"blockchain": "solana", "mint": MINT_A}, {"blockchain": "base", "mint": TOKEN_B}])
+    await ts.unsubscribe([{"blockchain": "base", "mint": TOKEN_B}])
+    # await ts.subscribe_all() / await ts.unsubscribe_all()
+    await ts.run_forever()
+
+    # or iterate {"event": ..., "data": ...}
+    async with csid.theses_stream() as ts:
+        await ts.subscribe_all()
+        async for ev in ts:
+            print(ev["event"], ev["data"])
+```
+
+Events: `ready`, `subscribed`, `thesis`, `thesis.reply`, `thesis.reaction`, `thesis.removed`, `heartbeat`, `reconnecting`, `close`, `error`. A refused connection (`invalid_api_key`, …) is fatal; a bad frame (`too_many_tokens`, an invalid address) is reported as `error` and the connection stays.
+
+Also over the trade stream (Pro plan): `csid.stream(events=["theses"], blockchain="solana", mint=mint)` emits `thesis`, `thesis.reply`, `thesis.reaction` and `thesis.removed` (or iterate `stream.theses()`). New theses of your users also arrive as the webhook `thesis.created` (`event["data"]["thesis"]`).
 
 ### Public thesis API: `ThesisClient`
 
@@ -240,7 +271,8 @@ Live over the stream: `csid.stream(events=["theses"], blockchain="solana", mint=
 ```python
 from cabalspy_id import ThesisClient
 
-with ThesisClient(access_token=result.tokens["access_token"]) as theses:
+# client_id credits posts to your app; add scope="instance" to show only theses written on your platform
+with ThesisClient(access_token=result.tokens["access_token"], client_id="csid_...") as theses:
     page = theses.list("solana", mint, sort="top")     # items, pagination, token, summary
     if theses.me("solana", mint)["can_post"]:
         theses.post("solana", mint, body="Strong community, still early.", stance="bull")
@@ -250,7 +282,7 @@ with ThesisClient(access_token=result.tokens["access_token"]) as theses:
 Methods: `list`, `iterate`, `summary`, `get`, `replies`, `by_user`, `me`, `post`, `reply`, `react`, `report`, `delete`, `live`, `set_access_token`. `AsyncThesisClient` has the same methods as coroutines. Live updates for one token (async):
 
 ```python
-live = ThesisClient().live("solana", mint)
+live = ThesisClient().live("solana", mint)               # also takes scope=, client_id=
 live.on("thesis", lambda t: print("new", t["body"]))   # also: reply, reaction, removed
 await live.connect()
 await live.run_forever()

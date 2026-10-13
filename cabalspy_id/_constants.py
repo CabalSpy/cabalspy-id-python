@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.2.0"
+SDK_VERSION = "0.3.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -24,6 +24,7 @@ ThesisEmoji = Literal["like", "🔥", "🚀", "💎", "👀", "😂", "🤝", "�
 ThesisReportReason = Literal["spam", "scam", "abuse", "impersonation", "other"]
 #: ``trades``: your users' trades. ``theses``: new theses, replies, reactions, removals.
 StreamTopic = Literal["trades", "theses"]
+ThesisScope = Literal["global", "instance"]
 
 #: solana, bnb (BNB Chain), base, eth (Ethereum), rh (Robinhood Chain)
 CHAINS: tuple[Chain, ...] = ("solana", "bnb", "base", "eth", "rh")
@@ -56,5 +57,10 @@ THESIS_REPORT_REASONS: tuple[str, ...] = ("spam", "scam", "abuse", "impersonatio
 #: Maximum thesis / reply length in characters.
 THESIS_MAX_BODY = 1000
 STREAM_TOPICS: tuple[str, ...] = ("trades", "theses")
+#: global: theses written on every platform; instance: only on your instance.
+THESIS_SCOPES: tuple[str, ...] = ("global", "instance")
+#: Tokens per theses-stream connection.
+MAX_THESES_STREAM_TOKENS = 200
+DEFAULT_THESES_STREAM_URL = "wss://api-id.cabalspy.xyz/v1/theses/stream"
 DEFAULT_THESIS_URL = "https://id.cabalspy.xyz/thesis/v1"
 DEFAULT_THESIS_WS_URL = "wss://id.cabalspy.xyz/thesis/v1/ws"

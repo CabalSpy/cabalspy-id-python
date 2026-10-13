@@ -28,7 +28,7 @@ import random
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -42,6 +42,7 @@ from ._constants import (
     Chain,
     ThesisEmoji,
     ThesisReportReason,
+    ThesisScope,
     ThesisSort,
     ThesisStance,
 )
@@ -92,15 +93,38 @@ def _token_path(chain: str, mint: str) -> str:
     return f"/tokens/{_q(chain)}/{_q(mint)}"
 
 
+def _scope_query(scope: str | None, client_id: str | None) -> dict[str, str]:
+    """Query parameters for a scope; instance scope needs the client_id."""
+    if scope is None or scope == "global":
+        return {"scope": scope} if scope else {}
+    if scope != "instance":
+        raise BadRequestError(
+            f"Invalid value for 'scope': {scope!r}",
+            code="invalid_parameter",
+            parameter="scope",
+            allowed=["global", "instance"],
+        )
+    if not client_id:
+        raise BadRequestError("scope=instance needs client_id", code="missing_parameter", parameter="client_id")
+    return {"scope": scope, "client_id": client_id}
+
+
 class _ThesisBase:
     def __init__(
         self,
         access_token: str | None = None,
         *,
+        scope: ThesisScope | None = None,
+        client_id: str | None = None,
         base_url: str = DEFAULT_THESIS_URL,
         ws_url: str = DEFAULT_THESIS_WS_URL,
         timeout: float = 15.0,
     ) -> None:
+        _scope_query(scope, client_id)
+        #: global (default) or instance: only theses written on ``client_id``'s instance.
+        self.scope = scope
+        #: Your instance's client_id: needed for scope="instance"; also credits posts to your app.
+        self.client_id = client_id
         self._access_token = access_token
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url.rstrip("/")
@@ -171,10 +195,28 @@ class _ThesisBase:
             parsed["data"], parsed.get("pagination") or {}, parsed.get("token") or {}, parsed.get("summary") or {}
         )
 
-    def live(self, chain: Chain, mint: str, **kwargs: Any) -> ThesisLive:
-        """Live updates for one token over the public websocket (async): thesis, reply, reaction, removed."""
+    def _scope(self, scope: str | None, client_id: str | None) -> dict[str, str]:
+        return _scope_query(scope or self.scope, client_id or self.client_id)
+
+    def _attributed(self, body: dict[str, Any]) -> dict[str, Any]:
+        return {**body, "client_id": self.client_id} if self.client_id else body
+
+    def live(
+        self,
+        chain: Chain,
+        mint: str,
+        *,
+        scope: ThesisScope | None = None,
+        client_id: str | None = None,
+        **kwargs: Any,
+    ) -> ThesisLive:
+        """Live updates for one token over the public websocket (async): thesis, reply, reaction, removed.
+
+        With ``scope="instance"`` (and ``client_id``) only theses written on that instance.
+        """
         path = _token_path(chain, mint).removeprefix("/tokens")
-        return ThesisLive(f"{self.ws_url}{path}", **kwargs)
+        query = urlencode(self._scope(scope, client_id))
+        return ThesisLive(f"{self.ws_url}{path}" + (f"?{query}" if query else ""), **kwargs)
 
 
 class ThesisClient(_ThesisBase):
@@ -227,13 +269,15 @@ class ThesisClient(_ThesisBase):
         stance: ThesisStance | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        scope: ThesisScope | None = None,
+        client_id: str | None = None,
     ) -> TokenThesesPage:
         """Theses on a token, with token info and counts."""
         parsed = self._call(
             "GET",
             _token_path(chain, mint),
             auth="optional",
-            params={"sort": sort, "stance": stance, "limit": limit, "cursor": cursor},
+            params={"sort": sort, "stance": stance, "limit": limit, "cursor": cursor, **self._scope(scope, client_id)},
         )
         return self._token_page(parsed)
 
@@ -247,9 +291,13 @@ class ThesisClient(_ThesisBase):
             if not page.pagination.get("has_more") or not cursor:
                 return
 
-    def summary(self, chain: Chain, mint: str) -> dict[str, Any]:
+    def summary(
+        self, chain: Chain, mint: str, *, scope: ThesisScope | None = None, client_id: str | None = None
+    ) -> dict[str, Any]:
         """Counts (theses, bull, bear, authors) and token info."""
-        result: dict[str, Any] = self._call("GET", f"{_token_path(chain, mint)}/summary")["data"]
+        result: dict[str, Any] = self._call(
+            "GET", f"{_token_path(chain, mint)}/summary", params=self._scope(scope, client_id)
+        )["data"]
         return result
 
     def get(self, thesis_id: str) -> dict[str, Any]:
@@ -277,13 +325,16 @@ class ThesisClient(_ThesisBase):
         """Posts a thesis. Holders only (``not_a_holder`` otherwise)."""
         self._check_stance(stance)
         result: dict[str, Any] = self._call(
-            "POST", _token_path(chain, mint), auth="required", body=self._clean({"body": body, "stance": stance})
+            "POST",
+            _token_path(chain, mint),
+            auth="required",
+            body=self._attributed(self._clean({"body": body, "stance": stance})),
         )["data"]
         return result
 
     def reply(self, thesis_id: str, body: str) -> dict[str, Any]:
         result: dict[str, Any] = self._call(
-            "POST", f"/items/{_q(thesis_id)}/replies", auth="required", body={"body": body}
+            "POST", f"/items/{_q(thesis_id)}/replies", auth="required", body=self._attributed({"body": body})
         )["data"]
         return result
 
@@ -358,12 +409,14 @@ class AsyncThesisClient(_ThesisBase):
         stance: ThesisStance | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        scope: ThesisScope | None = None,
+        client_id: str | None = None,
     ) -> TokenThesesPage:
         parsed = await self._call(
             "GET",
             _token_path(chain, mint),
             auth="optional",
-            params={"sort": sort, "stance": stance, "limit": limit, "cursor": cursor},
+            params={"sort": sort, "stance": stance, "limit": limit, "cursor": cursor, **self._scope(scope, client_id)},
         )
         return self._token_page(parsed)
 
@@ -377,8 +430,12 @@ class AsyncThesisClient(_ThesisBase):
             if not page.pagination.get("has_more") or not cursor:
                 return
 
-    async def summary(self, chain: Chain, mint: str) -> dict[str, Any]:
-        result: dict[str, Any] = (await self._call("GET", f"{_token_path(chain, mint)}/summary"))["data"]
+    async def summary(
+        self, chain: Chain, mint: str, *, scope: ThesisScope | None = None, client_id: str | None = None
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = (
+            await self._call("GET", f"{_token_path(chain, mint)}/summary", params=self._scope(scope, client_id))
+        )["data"]
         return result
 
     async def get(self, thesis_id: str) -> dict[str, Any]:
@@ -405,14 +462,19 @@ class AsyncThesisClient(_ThesisBase):
         self._check_stance(stance)
         result: dict[str, Any] = (
             await self._call(
-                "POST", _token_path(chain, mint), auth="required", body=self._clean({"body": body, "stance": stance})
+                "POST",
+                _token_path(chain, mint),
+                auth="required",
+                body=self._attributed(self._clean({"body": body, "stance": stance})),
             )
         )["data"]
         return result
 
     async def reply(self, thesis_id: str, body: str) -> dict[str, Any]:
         result: dict[str, Any] = (
-            await self._call("POST", f"/items/{_q(thesis_id)}/replies", auth="required", body={"body": body})
+            await self._call(
+                "POST", f"/items/{_q(thesis_id)}/replies", auth="required", body=self._attributed({"body": body})
+            )
         )["data"]
         return result
 

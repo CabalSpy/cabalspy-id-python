@@ -15,6 +15,7 @@ from cabalspy_id import (
     AuthenticationError,
     CabalSpyID,
     CabalSpyIDAuth,
+    CabalSpyIDError,
     PermissionError,
     TokenVerificationError,
 )
@@ -118,3 +119,21 @@ async def test_public_live_socket_opens() -> None:
         await live.connect()
         assert live.connected
         await live.close()
+
+
+async def test_theses_stream_refuses_an_invalid_key() -> None:
+    async with AsyncCabalSpyID("csid_api_not_a_real_key") as csid:
+        ts = csid.theses_stream(reconnect=False)
+        with pytest.raises(CabalSpyIDError) as e:
+            await ts.connect()
+        await ts.close()
+    # Refused in the stream (invalid_api_key) or, while the proxy does not upgrade
+    # this path, already at the HTTP handshake (ws_error).
+    assert e.value.code in ("invalid_api_key", "ws_error", "ws_closed_early")
+
+
+def test_public_scope_global() -> None:
+    from cabalspy_id import ThesisClient
+
+    with ThesisClient(scope="global") as tc:
+        assert isinstance(tc.summary("solana", WSOL)["theses"], int)

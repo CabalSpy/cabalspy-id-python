@@ -21,9 +21,11 @@ from ._constants import (
     DEFAULT_BASE_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
+    DEFAULT_THESES_STREAM_URL,
     DEFAULT_THESIS_URL,
     DEFAULT_THESIS_WS_URL,
     LEADERBOARD_SORTS,
+    MAX_THESES_STREAM_TOKENS,
     PERIODS,
     SCOPES,
     SDK_VERSION,
@@ -31,6 +33,7 @@ from ._constants import (
     THESIS_EMOJIS,
     THESIS_MAX_BODY,
     THESIS_REPORT_REASONS,
+    THESIS_SCOPES,
     WEBHOOK_EVENTS,
     Chain,
     Currency,
@@ -41,6 +44,7 @@ from ._constants import (
     StreamTopic,
     ThesisEmoji,
     ThesisReportReason,
+    ThesisScope,
     ThesisSort,
     ThesisStance,
 )
@@ -127,6 +131,10 @@ def __getattr__(name: str) -> object:
         from . import _stream
 
         return getattr(_stream, name)
+    if name in ("ThesesStream", "THESES_STREAM_EVENTS"):
+        from . import _theses_stream
+
+        return getattr(_theses_stream, name)
     raise AttributeError(f"module 'cabalspy_id' has no attribute {name!r}")
 
 
@@ -136,6 +144,7 @@ __all__ = [
     "CabalSpyID",
     "AsyncCabalSpyID",
     "CabalSpyIDStream",
+    "ThesesStream",
     "Envelope",
     "CabalSpyIDAuth",
     "AsyncCabalSpyIDAuth",
@@ -178,6 +187,11 @@ __all__ = [
     "STREAM_EVENTS",
     "THESIS_EVENTS",
     "STREAM_TOPICS",
+    "THESES_STREAM_EVENTS",
+    "THESIS_SCOPES",
+    "MAX_THESES_STREAM_TOKENS",
+    "DEFAULT_THESES_STREAM_URL",
+    "ThesisScope",
     "THESIS_EMOJIS",
     "THESIS_REPORT_REASONS",
     "THESIS_MAX_BODY",

@@ -4,6 +4,17 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-13
+
+### Added
+
+- `scope` (`global` | `instance`) on `list_theses`, `iter_theses`, `thesis_summary` and
+  `latest_theses`.
+- `ThesesStream` (`client.theses_stream()`, async) for `wss://api-id.cabalspy.xyz/v1/theses/stream`
+  (every plan): `subscribe` / `unsubscribe` up to 200 tokens, `subscribe_all` / `unsubscribe_all`,
+  subscriptions restored after reconnects, heartbeat watchdog, handlers and async iteration.
+- `ThesisClient` / `AsyncThesisClient`: `scope` and `client_id` (reads, `live()`, post attribution).
+
 ## [0.2.0] - 2026-10-13
 
 ### Added
@@ -45,5 +56,6 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.3.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CabalSpy/cabalspy-id-python/releases/tag/v0.1.0
