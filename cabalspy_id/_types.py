@@ -590,6 +590,15 @@ class ThesisPosition(TypedDict, total=False):
     private: bool
 
 
+class ThesisReactor(TypedDict):
+    """Who reacted recently (newest first)."""
+
+    emoji: str
+    csid_id: str
+    username: str | None
+    at: str
+
+
 class Thesis(TypedDict, total=False):
     """A thesis (``kind == "thesis"``) or a reply to one (``kind == "reply"``)."""
 
@@ -605,6 +614,8 @@ class Thesis(TypedDict, total=False):
     replies: int
     #: Count per reaction, e.g. {"like": 3, "🚀": 1}.
     reactions: dict[str, int]
+    #: The latest reactions with who reacted, newest first.
+    reacted_by: list[ThesisReactor]
     #: The viewer's own reactions (pass csid_id / an access token).
     my_reactions: list[str]
     #: Name of the app it was posted through.
@@ -613,6 +624,8 @@ class Thesis(TypedDict, total=False):
     is_mine: bool
     #: Theses only (not replies).
     position: ThesisPosition
+    #: Theses only: a preview of the newest replies, oldest first.
+    latest_replies: list[Thesis]
     #: Stream payloads only.
     blockchain: Chain
 
@@ -643,6 +656,40 @@ class ThesisEligibility(TypedDict, total=False):
     paused: bool
     #: Data API: why the user can't write through your app.
     reason: str
+
+
+class ThesisNotification(TypedDict):
+    """A moderation notification (warning, hidden post, pause, appeal result ...).
+
+    ``kind``: post_hidden, paused, banned, post_removed, post_restored,
+    appeal_accepted, appeal_rejected, reporting_paused.
+    """
+
+    id: int
+    kind: str
+    #: Ready-to-show English text.
+    text: str
+    #: Details, e.g. thesis_id, until, note.
+    data: dict[str, Any]
+    created_at: str
+    read: bool
+    #: Can be appealed (within 30 days).
+    appealable: bool
+    #: pending | accepted | rejected when appealed, else None.
+    appeal: str | None
+
+
+class ThesisNotifications(TypedDict):
+    unread: int
+    items: list[ThesisNotification]
+
+
+class ThesisNotices(TypedDict):
+    """Unread moderation notices of the signed-in user (public API ``me()``)."""
+
+    unread: int
+    latest: str | None
+    url: str
 
 
 class ThesisReactions(TypedDict):

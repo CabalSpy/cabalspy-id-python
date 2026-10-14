@@ -4,6 +4,19 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-14
+
+### Added
+
+- `Thesis["reacted_by"]` (who reacted recently) and `Thesis["latest_replies"]` (reply preview).
+- Moderation notifications: Data API `thesis_notifications(csid_id)` and
+  `appeal_thesis_decision(csid_id, notification_id, message)`; public `ThesisClient.notifications()`,
+  `mark_notifications_read()` and `appeal(notification_id, message)`. `TypedDict`s
+  `ThesisNotification`, `ThesisNotifications`, `ThesisNotices`; `me()` returns `notices`.
+- Webhook types `thesis.reply` (`data["reply"]`) and `thesis.reaction`
+  (`thesis_id`, `chain`, `mint`, `emoji`, `on`, `reactions`).
+- Error code `reporting_paused` (403, `PermissionError`) documented.
+
 ## [0.3.0] - 2026-10-13
 
 ### Added
@@ -56,6 +69,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.4.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CabalSpy/cabalspy-id-python/releases/tag/v0.1.0

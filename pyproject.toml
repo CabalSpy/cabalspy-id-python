@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cabalspy-id"
-version = "0.3.0"
+version = "0.4.0"
 description = "Official SDK for CabalSpy ID, the verified social layer for crypto trading: Login with CabalSpy ID (OpenID Connect, PKCE, ID token verification), Data API for verified wallets, KOL badges and trading stats (PnL, win rate, holdings), token theses, live stream and webhook verification."
 readme = "README.md"
 license = "MIT"

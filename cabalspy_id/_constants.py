@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.3.0"
+SDK_VERSION = "0.4.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -48,6 +48,8 @@ WEBHOOK_EVENTS: tuple[str, ...] = (
     "kol.granted",
     "consent.revoked",
     "thesis.created",
+    "thesis.reply",
+    "thesis.reaction",
     "webhook.test",
 )
 

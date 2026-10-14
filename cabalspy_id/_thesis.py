@@ -180,6 +180,11 @@ class _ThesisBase:
             )
 
     @staticmethod
+    def _check_message(message: str) -> None:
+        if not message:
+            raise BadRequestError("Parameter 'message' is required", code="missing_parameter", parameter="message")
+
+    @staticmethod
     def _check_stance(stance: str | None) -> None:
         if stance not in (None, "bull", "bear"):
             raise BadRequestError(
@@ -317,7 +322,8 @@ class ThesisClient(_ThesisBase):
 
     # the signed-in user
     def me(self, chain: Chain, mint: str) -> dict[str, Any]:
-        """Eligibility of the signed-in user (can_post, can_reply, holder, paused) and who they are."""
+        """Eligibility of the signed-in user (can_post, can_reply, holder, paused), who they are (``user``)
+        and their unread moderation notices (``notices``: unread, latest, url)."""
         result: dict[str, Any] = self._call("GET", f"{_token_path(chain, mint)}/me", auth="required")["data"]
         return result
 
@@ -357,6 +363,25 @@ class ThesisClient(_ThesisBase):
 
     def delete(self, thesis_id: str) -> dict[str, Any]:
         result: dict[str, Any] = self._call("DELETE", f"/items/{_q(thesis_id)}", auth="required")["data"]
+        return result
+
+    # moderation notifications of the signed-in user
+    def notifications(self) -> dict[str, Any]:
+        """The signed-in user's moderation notifications: ``{"unread", "items"}``."""
+        result: dict[str, Any] = self._call("GET", "/me/notifications", auth="required")["data"]
+        return result
+
+    def mark_notifications_read(self) -> dict[str, Any]:
+        """Marks all of the signed-in user's notifications as read."""
+        result: dict[str, Any] = self._call("POST", "/me/notifications/read", auth="required")["data"]
+        return result
+
+    def appeal(self, notification_id: int, message: str) -> dict[str, Any]:
+        """Appeals a moderation decision (an ``appealable`` notification; 10-1000 characters, within 30 days)."""
+        self._check_message(message)
+        result: dict[str, Any] = self._call(
+            "POST", f"/me/notifications/{_q(str(notification_id))}/appeal", auth="required", body={"message": message}
+        )["data"]
         return result
 
 
@@ -501,6 +526,26 @@ class AsyncThesisClient(_ThesisBase):
 
     async def delete(self, thesis_id: str) -> dict[str, Any]:
         result: dict[str, Any] = (await self._call("DELETE", f"/items/{_q(thesis_id)}", auth="required"))["data"]
+        return result
+
+    async def notifications(self) -> dict[str, Any]:
+        result: dict[str, Any] = (await self._call("GET", "/me/notifications", auth="required"))["data"]
+        return result
+
+    async def mark_notifications_read(self) -> dict[str, Any]:
+        result: dict[str, Any] = (await self._call("POST", "/me/notifications/read", auth="required"))["data"]
+        return result
+
+    async def appeal(self, notification_id: int, message: str) -> dict[str, Any]:
+        self._check_message(message)
+        result: dict[str, Any] = (
+            await self._call(
+                "POST",
+                f"/me/notifications/{_q(str(notification_id))}/appeal",
+                auth="required",
+                body={"message": message},
+            )
+        )["data"]
         return result
 
 

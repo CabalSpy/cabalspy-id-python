@@ -137,3 +137,10 @@ def test_public_scope_global() -> None:
 
     with ThesisClient(scope="global") as tc:
         assert isinstance(tc.summary("solana", WSOL)["theses"], int)
+
+
+def test_notifications_need_a_valid_token() -> None:
+    from cabalspy_id import ThesisClient
+
+    with ThesisClient("not-a-token") as tc, pytest.raises(AuthenticationError):
+        tc.notifications()

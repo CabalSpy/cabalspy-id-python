@@ -231,7 +231,14 @@ if ok["can_post"]:
 | `report_thesis(thesis_id=, reason=, note=, csid_id=)` | `POST /v1/theses/report` |
 | `delete_thesis(thesis_id=, csid_id=)` | `POST /v1/theses/delete` |
 
-Thesis error codes: `not_a_holder`, `consent_required`, `scope_missing`, `plan_user_limit` (`PlanUserLimitError`), `posting_paused`, `sandbox_user` (403, `PermissionError`); `invalid_body`, `duplicate` (400); `not_found` (404); `rate_limited` (429). Writes are never retried after a server or network error, so a post can't be duplicated; only the API's own rate limit is retried.
+| `thesis_notifications(csid_id)` | `GET /v1/theses/notifications` |
+| `appeal_thesis_decision(csid_id, notification_id, message)` | `POST /v1/theses/appeal` |
+
+Every thesis carries `reacted_by` (the latest reactions with who reacted) and, for theses, `latest_replies` (a preview of the newest replies).
+
+**Moderation.** Posts hidden after reports, pauses and moderator decisions reach the author as notifications (`id`, `kind`, `text`, `data`, `created_at`, `read`, `appealable`, `appeal`); `appealable` ones can be appealed within 30 days with 10-1000 characters. Through the Data API in your user's name: `thesis_notifications(csid_id)` / `appeal_thesis_decision(...)`; with the user's token: `ThesisClient.notifications()`, `mark_notifications_read()`, `appeal(id, message)`. `ThesisClient.me()` also returns `notices` (`unread`, `latest`, `url`) for a badge.
+
+Thesis error codes: `not_a_holder`, `consent_required`, `scope_missing`, `plan_user_limit` (`PlanUserLimitError`), `posting_paused`, `reporting_paused`, `sandbox_user` (403, `PermissionError`); `invalid_body`, `duplicate` (400); `not_found` (404); `rate_limited` (429). Writes are never retried after a server or network error, so a post can't be duplicated; only the API's own rate limit is retried.
 
 With `data-client-id` the widget loads the design saved in the dashboard; `data-theme`, `data-scope`, `data-sort`, `data-font`, `data-radius`, `data-bg`, `data-card`, `data-text`, `data-muted`, `data-border`, `data-accent`, `data-accent-text`, `data-bull`, `data-bear`, `data-show-header`, `data-show-sentiment`, `data-compact` and `data-height` override it.
 
@@ -262,7 +269,7 @@ async with AsyncCabalSpyID() as csid:
 
 Events: `ready`, `subscribed`, `thesis`, `thesis.reply`, `thesis.reaction`, `thesis.removed`, `heartbeat`, `reconnecting`, `close`, `error`. A refused connection (`invalid_api_key`, …) is fatal; a bad frame (`too_many_tokens`, an invalid address) is reported as `error` and the connection stays.
 
-Also over the trade stream (Pro plan): `csid.stream(events=["theses"], blockchain="solana", mint=mint)` emits `thesis`, `thesis.reply`, `thesis.reaction` and `thesis.removed` (or iterate `stream.theses()`). New theses of your users also arrive as the webhook `thesis.created` (`event["data"]["thesis"]`).
+Also over the trade stream (Pro plan): `csid.stream(events=["theses"], blockchain="solana", mint=mint)` emits `thesis`, `thesis.reply`, `thesis.reaction` and `thesis.removed` (or iterate `stream.theses()`). Your users' activity also arrives as webhooks: `thesis.created` (`event["data"]["thesis"]`), `thesis.reply` (`event["data"]["reply"]`) and `thesis.reaction` (`thesis_id`, `chain`, `mint`, `emoji`, `on`, `reactions`).
 
 ### Public thesis API: `ThesisClient`
 
@@ -279,7 +286,7 @@ with ThesisClient(access_token=result.tokens["access_token"], client_id="csid_..
     theses.react(page.items[0]["id"], "🚀")
 ```
 
-Methods: `list`, `iterate`, `summary`, `get`, `replies`, `by_user`, `me`, `post`, `reply`, `react`, `report`, `delete`, `live`, `set_access_token`. `AsyncThesisClient` has the same methods as coroutines. Live updates for one token (async):
+Methods: `list`, `iterate`, `summary`, `get`, `replies`, `by_user`, `me`, `post`, `reply`, `react`, `report`, `delete`, `notifications`, `mark_notifications_read`, `appeal`, `live`, `set_access_token`. `AsyncThesisClient` has the same methods as coroutines. Live updates for one token (async):
 
 ```python
 live = ThesisClient().live("solana", mint)               # also takes scope=, client_id=
@@ -314,7 +321,7 @@ The server sends a heartbeat every 30 seconds. The client reconnects with expone
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created` — only for users within the plan's limit.
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit.
 
 ```python
 from cabalspy_id import verify_webhook

@@ -511,6 +511,26 @@ class _Endpoints:
             payload["note"] = note
         return self._post("/theses/report", payload)
 
+    def thesis_notifications(self, csid_id: str) -> Any:
+        """GET /v1/theses/notifications — moderation notifications of one of your users
+        (warnings, hidden posts, pauses, appeal results), with the unread count.
+
+        Returns :class:`~cabalspy_id.ThesisNotifications`.
+        """
+        _required(csid_id, "csid_id")
+        return self._get("/theses/notifications", {"csid_id": csid_id})
+
+    def appeal_thesis_decision(self, csid_id: str, notification_id: int, message: str) -> Any:
+        """POST /v1/theses/appeal — appeals a moderation decision in the user's name
+        (an ``appealable`` notification, within 30 days; message 10-1000 characters).
+        """
+        _required(csid_id, "csid_id")
+        _required(notification_id, "notification_id")
+        _required(message, "message")
+        return self._post(
+            "/theses/appeal", {"csid_id": csid_id, "notification_id": notification_id, "message": message}
+        )
+
     def delete_thesis(self, *, thesis_id: str, csid_id: str) -> Any:
         """POST /v1/theses/delete — deletes the user's own thesis or reply."""
         _required(thesis_id, "thesis_id")
