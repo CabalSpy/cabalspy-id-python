@@ -38,6 +38,27 @@ Everything for developers — instance (client_id), client secrets, redirect URI
 - **Trader profiles** — X profile, verified wallets, holdings, PnL calendar
 - **KOL badges** — reviewed badges for influential traders, shown wherever they sign in
 
+## Packages
+
+One codebase, one version line. The focused packages re-export parts of `cabalspy-id`, so they always behave exactly the same.
+
+| Package | npm | PyPI | What it contains |
+|---|---|---|---|
+| **cabalspy-id** | [`cabalspy-id`](https://www.npmjs.com/package/cabalspy-id) | [`cabalspy-id`](https://pypi.org/project/cabalspy-id/) | everything below |
+| **socialfi-api** ([repo](https://github.com/CabalSpy/socialfi-api)) | [`socialfi-api`](https://www.npmjs.com/package/socialfi-api) | [`socialfi-api`](https://pypi.org/project/socialfi-api/) | the SocialFi API: Data API, Login with CabalSpy ID, trade stream, webhooks (= `cabalspy-id/api`, `cabalspy_id.api`) |
+| **socialfi-thesis** ([repo](https://github.com/CabalSpy/socialfi-thesis)) | [`socialfi-thesis`](https://www.npmjs.com/package/socialfi-thesis) | [`socialfi-thesis`](https://pypi.org/project/socialfi-thesis/) | token theses: Data API thesis methods, public thesis client, theses stream (= `cabalspy-id/thesis`, `cabalspy_id.thesis`) |
+| **socialfi-widget** ([repo](https://github.com/CabalSpy/socialfi-widget)) | [`socialfi-widget`](https://www.npmjs.com/package/socialfi-widget) | – | the browser SocialFi widgets: login button and theses widget, vanilla and React (= `cabalspy-id/widget`) |
+
+### Modules
+
+| Import | Contents |
+|---|---|
+| `cabalspy_id` | everything |
+| `cabalspy_id.api` | `CabalSpyID`, `AsyncCabalSpyID`, `CabalSpyIDStream`, `CabalSpyIDAuth`, `verify_webhook`, errors and Data API types |
+| `cabalspy_id.thesis` | `CabalSpyID` (thesis methods), `ThesisClient`, `AsyncThesisClient`, `ThesisLive`, `ThesesStream`, thesis types |
+
+The objects are the same as in `cabalspy_id`.
+
 ## Login button
 
 Put the official button on your page and point it at your login route:
