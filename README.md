@@ -1,8 +1,12 @@
-# CabalSpy ID Python SDK — Login with CabalSpy ID, verified wallets and trading stats
+# CabalSpy ID — SocialFi API & SDK for Python
 
-Official Python SDK for **[CabalSpy ID](https://id.cabalspy.xyz)**, the verified social layer for crypto trading.
+[![PyPI](https://img.shields.io/pypi/v/cabalspy-id.svg)](https://pypi.org/project/cabalspy-id/) [![ci](https://github.com/CabalSpy/cabalspy-id-python/actions/workflows/ci.yml/badge.svg)](https://github.com/CabalSpy/cabalspy-id-python/actions/workflows/ci.yml) [![Python](https://img.shields.io/pypi/pyversions/cabalspy-id.svg)](https://pypi.org/project/cabalspy-id/) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-People sign in with X, prove their wallets with a tiny on-chain payment (no wallet connect, no signatures) and can earn a reviewed **KOL badge**. Every verified wallet is tracked live on **Solana, BNB Chain, Base, Ethereum and Robinhood Chain**. Your platform adds "Login with CabalSpy ID" and receives the user's X profile, verified wallets, KOL badge and full trading stats — PnL, win rate, trades, holdings — for copy trading, leaderboards and social features.
+Official Python SDK (sync and async) for [CabalSpy ID](https://id.cabalspy.xyz). **CabalSpy ID is the SocialFi API for crypto apps**: one SocialFi integration gives your platform login with X, wallets verified by a tiny on-chain payment (no wallet connect, no signatures), reviewed KOL badges, live trades and PnL of your users and a drop-in SocialFi widget for token theses — on **Solana, BNB Chain, Base, Ethereum and Robinhood Chain**.
+
+Your platform adds "Login with CabalSpy ID" and receives the user's X profile, verified wallets, KOL badge and full trading stats — PnL, win rate, trades, holdings — for copy trading, leaderboards and social features.
+
+[Website](https://www.cabalspy.xyz/cabalspy-id/) · [Docs](https://docs.cabalspy.xyz/cabalspy-id) · [Sign in](https://id.cabalspy.xyz) · [API dashboard](https://apidashboard.cabalspy.xyz)
 
 ```bash
 pip install cabalspy-id
@@ -24,6 +28,15 @@ pip install "cabalspy-id[stream]"
 Sync and async, fully typed (`py.typed`, `TypedDict` responses). Python 3.10+.
 
 Everything for developers — instance (client_id), client secrets, redirect URIs, button builder, webhooks, API keys — lives in the [API dashboard](https://apidashboard.cabalspy.xyz), tab **CabalSpy ID**. For React and the browser, see the [TypeScript SDK](https://www.npmjs.com/package/cabalspy-id).
+
+## What can you build
+
+- **Social trading feed** — every trade of your users live, with their X profile and PnL
+- **Leaderboards** — rank your users by PnL, volume, win rate or trades
+- **Copy trading** — follow verified wallets of real, identified traders
+- **Token theses** — holders-only opinions on a token with the author's real position, as a SocialFi widget or your own UI
+- **Trader profiles** — X profile, verified wallets, holdings, PnL calendar
+- **KOL badges** — reviewed badges for influential traders, shown wherever they sign in
 
 ## Login button
 

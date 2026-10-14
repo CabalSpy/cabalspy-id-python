@@ -4,18 +4,37 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cabalspy-id"
-version = "0.4.0"
-description = "Official SDK for CabalSpy ID, the verified social layer for crypto trading: Login with CabalSpy ID (OpenID Connect, PKCE, ID token verification), Data API for verified wallets, KOL badges and trading stats (PnL, win rate, holdings), token theses, live stream and webhook verification."
+version = "0.4.1"
+description = "SocialFi API & SDK for CabalSpy ID — add a social layer to any app: login with X + verified wallets, live trades and PnL of your users, token theses, leaderboards and copy trading on Solana, BNB Chain, Base, Ethereum and Robinhood Chain."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "CabalSpy", email = "contact@cabalspy.xyz" }]
 keywords = [
-  "cabalspy", "cabalspy-id", "csid", "login", "oidc", "openid-connect", "oauth2", "pkce",
-  "sign-in", "socialfi", "identity", "verified-wallets", "wallet-verification", "kol",
-  "kol-badge", "x-login", "twitter-login", "copy-trading", "leaderboard", "pnl", "win-rate",
-  "trading-stats", "token-theses", "thesis", "webhooks", "standard-webhooks", "websocket", "solana", "base", "bnb",
-  "ethereum", "robinhood-chain", "sdk",
+  "socialfi",
+  "socialfi-api",
+  "socialfi-sdk",
+  "socialfi-widget",
+  "social-trading",
+  "copy-trading",
+  "crypto-social",
+  "web3-social",
+  "kol",
+  "kol-tracker",
+  "wallet-tracker",
+  "trading-leaderboard",
+  "pnl",
+  "token-thesis",
+  "crypto-login",
+  "oidc",
+  "openid-connect",
+  "solana",
+  "bnb",
+  "base",
+  "ethereum",
+  "cabalspy",
+  "sdk",
+  "python",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -27,8 +46,12 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Framework :: AsyncIO",
+  "Topic :: Internet :: WWW/HTTP",
   "Topic :: Internet :: WWW/HTTP :: Session",
+  "Topic :: Communications",
   "Topic :: Office/Business :: Financial",
+  "Topic :: Office/Business :: Financial :: Investment",
   "Topic :: Security",
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Typing :: Typed",
@@ -47,6 +70,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://id.cabalspy.xyz"
+Website = "https://www.cabalspy.xyz/cabalspy-id/"
 Documentation = "https://docs.cabalspy.xyz/cabalspy-id"
 Repository = "https://github.com/CabalSpy/cabalspy-id-python"
 Issues = "https://github.com/CabalSpy/cabalspy-id-python/issues"

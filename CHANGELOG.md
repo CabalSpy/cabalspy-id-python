@@ -4,6 +4,12 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-10-14
+
+### Changed
+
+- Package description, keywords, classifiers and README: CabalSpy ID as a SocialFi API & SDK. No code changes.
+
 ## [0.4.0] - 2026-10-14
 
 ### Added
@@ -69,6 +75,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.4.1]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.1.0...v0.2.0
