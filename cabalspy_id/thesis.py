@@ -3,7 +3,8 @@ the author's real position, replies, reactions and moderation notifications.
 
 - ``CabalSpyID`` / ``AsyncCabalSpyID``: Data API thesis methods (``list_theses``,
   ``post_thesis`` in a user's name, ...)
-- ``ThesisClient`` / ``AsyncThesisClient``: public thesis API with a user's access token, ``live()``
+- ``ThesisClient`` / ``AsyncThesisClient``: public thesis API (your public ``client_id`` required)
+  with a user's access token, ``live()``
 - ``ThesesStream``: live theses for up to 200 tokens per connection (every plan)
 
     from cabalspy_id.thesis import CabalSpyID, ThesisClient
@@ -16,6 +17,7 @@ from typing import Any
 import cabalspy_id as _root
 from cabalspy_id import (
     CHAINS,
+    CLIENT_ID_HEADER,
     DEFAULT_THESES_STREAM_URL,
     DEFAULT_THESIS_URL,
     DEFAULT_THESIS_WS_URL,
@@ -114,6 +116,7 @@ __all__ = [
     "MAX_THESES_STREAM_TOKENS",
     "DEFAULT_THESIS_URL",
     "DEFAULT_THESIS_WS_URL",
+    "CLIENT_ID_HEADER",
     "DEFAULT_THESES_STREAM_URL",
     "Chain",
     "ThesisScope",

@@ -89,12 +89,14 @@ def test_discovery_and_jwks() -> None:
 
 
 WSOL = "So11111111111111111111111111111111111111112"
+#: Public client_id of the CabalSpy ID playground instance (not a secret).
+PLAYGROUND_CLIENT_ID = "csid_a97b0c26eccf6f41d5e3a99b"
 
 
 def test_public_theses() -> None:
     from cabalspy_id import BadRequestError, ThesisClient
 
-    with ThesisClient() as tc:
+    with ThesisClient(client_id=PLAYGROUND_CLIENT_ID) as tc:
         page = tc.list("solana", WSOL, limit=2)
         assert isinstance(page.items, list)
         assert page.token["mint"] == WSOL
@@ -102,7 +104,7 @@ def test_public_theses() -> None:
         assert tc.summary("solana", WSOL)["token"]["mint"] == WSOL
         with pytest.raises(BadRequestError):
             tc.summary("solana", "not-a-mint")
-    with ThesisClient("not-a-token") as tc, pytest.raises(AuthenticationError):
+    with ThesisClient("not-a-token", client_id=PLAYGROUND_CLIENT_ID) as tc, pytest.raises(AuthenticationError):
         tc.me("solana", WSOL)
 
 
@@ -114,7 +116,7 @@ def test_data_api_theses_needs_a_key() -> None:
 async def test_public_live_socket_opens() -> None:
     from cabalspy_id import AsyncThesisClient
 
-    async with AsyncThesisClient() as tc:
+    async with AsyncThesisClient(client_id=PLAYGROUND_CLIENT_ID) as tc:
         live = tc.live("solana", WSOL, reconnect=False)
         await live.connect()
         assert live.connected
@@ -135,12 +137,12 @@ async def test_theses_stream_refuses_an_invalid_key() -> None:
 def test_public_scope_global() -> None:
     from cabalspy_id import ThesisClient
 
-    with ThesisClient(scope="global") as tc:
+    with ThesisClient(client_id=PLAYGROUND_CLIENT_ID, scope="global") as tc:
         assert isinstance(tc.summary("solana", WSOL)["theses"], int)
 
 
 def test_notifications_need_a_valid_token() -> None:
     from cabalspy_id import ThesisClient
 
-    with ThesisClient("not-a-token") as tc, pytest.raises(AuthenticationError):
+    with ThesisClient("not-a-token", client_id=PLAYGROUND_CLIENT_ID) as tc, pytest.raises(AuthenticationError):
         tc.notifications()

@@ -17,6 +17,7 @@ Docs: https://docs.cabalspy.xyz/cabalspy-id
 from ._client import AsyncCabalSpyID, CabalSpyID, Envelope
 from ._constants import (
     CHAINS,
+    CLIENT_ID_HEADER,
     CURRENCY_BY_CHAIN,
     DEFAULT_BASE_URL,
     DEFAULT_ISSUER,
@@ -205,6 +206,7 @@ __all__ = [
     "THESIS_MAX_BODY",
     "DEFAULT_THESIS_URL",
     "DEFAULT_THESIS_WS_URL",
+    "CLIENT_ID_HEADER",
     "StreamTopic",
     "ThesisStance",
     "ThesisSort",

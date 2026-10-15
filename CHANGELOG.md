@@ -4,6 +4,31 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-10-15
+
+The public thesis API (`https://id.cabalspy.xyz/thesis/v1/...`) and its live socket
+(`wss://id.cabalspy.xyz/thesis/v1/ws/{chain}/{mint}`) now require your instance's public
+client_id on every call. It is shown in the dashboard next to the API key; it is not a secret
+and not the API key. The Data API (`CabalSpyID`, API key) is unchanged.
+
+### Changed (breaking for the thesis client)
+
+- `ThesisClient` / `AsyncThesisClient` require `client_id`:
+  `ThesisClient(access_token=None, *, client_id="csid_...", scope=None, ...)`. Without it (or with
+  an empty string) the constructor raises `AuthenticationError` with `code == "client_id_required"`.
+- Every call sends the header `X-CSID-Client-Id: <client_id>`; `live()` adds `client_id=<client_id>`
+  to the socket URL (`scope="instance"` keeps working with the same client_id). `post()` and
+  `reply()` always send `client_id` in the body.
+
+### Added
+
+- New server error codes, mapped to the existing exception classes: `client_id_required` and
+  `invalid_client` (401, `AuthenticationError`), `origin_not_allowed` (403, `PermissionError`),
+  `rate_limited` (429, `RateLimitError`, `retry_after` from Retry-After, 60 s).
+- `ThesisLive` treats the close codes 4401 (`client_id_required` / `invalid_client`) and 4403
+  (`origin_not_allowed`) as final (no reconnect) and backs off 60 s after 4429 (`rate_limited`).
+- `CLIENT_ID_HEADER` constant.
+
 ## [0.5.1] - 2026-10-15
 
 ### Changed
@@ -96,6 +121,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.5.2]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.4.0...v0.4.1

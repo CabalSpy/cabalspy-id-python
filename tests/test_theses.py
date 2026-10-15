@@ -19,9 +19,11 @@ from cabalspy_id import (
     NotFoundError,
     PermissionError,
     PlanUserLimitError,
+    RateLimitError,
     ServerError,
     ThesisClient,
 )
+from cabalspy_id.thesis import CLIENT_ID_HEADER
 
 from .conftest import Recorder, api_error, ok
 
@@ -259,10 +261,11 @@ def public_handler(r: httpx.Request) -> httpx.Response:
 
 def test_public_client_reads_and_writes() -> None:
     rec = Recorder(public_handler)
-    tc = ThesisClient(http_client=rec.client())
+    tc = ThesisClient(client_id="csid_app", http_client=rec.client())
     page = tc.list("solana", MINT, sort="top")
     assert page.items[0]["id"] == "t1" and page.token["symbol"] == "SOL" and page.summary["bull"] == 1
     assert "authorization" not in rec.requests[0].headers
+    assert rec.requests[0].headers["x-csid-client-id"] == "csid_app"
     with pytest.raises(AuthenticationError) as e:
         tc.post("solana", MINT, body="x")
     assert e.value.code == "sign_in_required"
@@ -278,13 +281,69 @@ def test_public_client_reads_and_writes() -> None:
         (r.method, str(r.url).removeprefix(BASE), json.loads(r.content) if r.content else None) for r in writes
     ] == [
         ("GET", f"/tokens/solana/{MINT}/me", None),
-        ("POST", f"/tokens/solana/{MINT}", {"body": "gm", "stance": "bear"}),
-        ("POST", "/items/t1/replies", {"body": "agree"}),
+        ("POST", f"/tokens/solana/{MINT}", {"body": "gm", "stance": "bear", "client_id": "csid_app"}),
+        ("POST", "/items/t1/replies", {"body": "agree", "client_id": "csid_app"}),
         ("POST", "/items/t1/reactions", {"emoji": "🚀", "on": True}),
         ("POST", "/items/t1/report", {"reason": "scam", "note": "rug"}),
         ("DELETE", "/items/t1", None),
     ]
     assert all(r.headers["authorization"] == "Bearer at-1" for r in writes)
+    assert all(r.headers[CLIENT_ID_HEADER] == "csid_app" for r in rec.requests)
+
+
+@pytest.mark.parametrize("client_id", [None, "", "   "])
+def test_public_client_requires_client_id(client_id: str | None) -> None:
+    for cls in (ThesisClient, AsyncThesisClient):
+        with pytest.raises(AuthenticationError) as e:
+            cls(client_id=client_id)
+        assert e.value.code == "client_id_required"
+        assert e.value.parameter == "client_id"
+        assert "public client_id" in e.value.message and "not the API key" in e.value.message
+    with pytest.raises(AuthenticationError):
+        ThesisClient("access-token")
+    assert ThesisClient(client_id=" csid_app ").client_id == "csid_app"
+
+
+def test_public_client_sends_client_id_header_on_every_call() -> None:
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/summary"):
+            return httpx.Response(200, json={"success": True, "data": {"theses": 0}})
+        if r.url.path.endswith("/me/notifications"):
+            return httpx.Response(200, json={"success": True, "data": {"unread": 0, "items": []}})
+        return httpx.Response(200, json={"success": True, "data": thesis()})
+
+    rec = Recorder(handler)
+    tc = ThesisClient(client_id="csid_app", http_client=rec.client())
+    tc.summary("solana", MINT)
+    tc.get("t1")
+    tc.set_access_token("at")
+    tc.notifications()
+    assert CLIENT_ID_HEADER == "X-CSID-Client-Id"
+    assert [r.headers["x-csid-client-id"] for r in rec.requests] == ["csid_app"] * 3
+    # global scope: the header carries it, not the query
+    assert [r.url.params.get("client_id") for r in rec.requests] == [None] * 3
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "cls", "headers"),
+    [
+        (401, "client_id_required", AuthenticationError, None),
+        (401, "invalid_client", AuthenticationError, None),
+        (403, "origin_not_allowed", PermissionError, None),
+        (429, "rate_limited", RateLimitError, {"Retry-After": "60"}),
+    ],
+)
+def test_public_client_maps_client_id_errors(
+    status: int, code: str, cls: type[Exception], headers: dict[str, str] | None
+) -> None:
+    rec = Recorder(lambda _r: api_error(status, code, headers=headers))
+    with pytest.raises(cls) as e:
+        ThesisClient(client_id="csid_app", http_client=rec.client()).get("t1")
+    err: Any = e.value
+    assert err.code == code and err.status == status
+    assert err.docs == f"https://docs.cabalspy.xyz/cabalspy-id/errors#{code}"
+    if status == 429:
+        assert err.retry_after == 60
 
 
 def test_public_client_errors() -> None:
@@ -295,7 +354,7 @@ def test_public_client_errors() -> None:
             )
         return httpx.Response(401, json={"success": False, "error": {"code": "invalid_token", "message": "Expired"}})
 
-    tc = ThesisClient("at", http_client=Recorder(handler).client())
+    tc = ThesisClient("at", client_id="csid_app", http_client=Recorder(handler).client())
     with pytest.raises(PermissionError) as e:
         tc.post("solana", MINT, body="x")
     assert e.value.code == "not_a_holder"
@@ -306,8 +365,10 @@ def test_public_client_errors() -> None:
 
 
 async def test_async_public_client() -> None:
-    async with AsyncThesisClient(http_client=Recorder(public_handler).async_client()) as tc:
+    rec = Recorder(public_handler)
+    async with AsyncThesisClient(client_id="csid_app", http_client=rec.async_client()) as tc:
         assert [t["id"] async for t in tc.iterate("solana", MINT)] == ["t1"]
+    assert rec.requests[0].headers["x-csid-client-id"] == "csid_app"
 
 
 # ── live: stream theses and the public socket ────────────────────────────────
@@ -321,6 +382,10 @@ async def ws_server():
         state["paths"].append(ws.request.path)
         if state["mode"] == "refuse":
             await ws.close(code=1008)
+            return
+        if state["mode"] == "close":
+            code, reason = state["close"]
+            await ws.close(code=code, reason=reason)
             return
         if state["mode"] == "stream":
             q = {k: v[0] for k, v in parse_qs(urlsplit(ws.request.path).query).items()}
@@ -419,7 +484,7 @@ def test_stream_validation() -> None:
 
 async def test_public_live(ws_server: dict[str, Any]) -> None:
     ws_server["mode"] = "public"
-    tc = ThesisClient(ws_url=f"ws://127.0.0.1:{ws_server['port']}/thesis/v1/ws")
+    tc = ThesisClient(client_id="csid_app", ws_url=f"ws://127.0.0.1:{ws_server['port']}/thesis/v1/ws")
     live = tc.live("solana", MINT)
     got: list[str] = []
     live.on("thesis", lambda t: got.append(t["id"]))
@@ -427,7 +492,7 @@ async def test_public_live(ws_server: dict[str, Any]) -> None:
     live.on("removed", lambda r: got.append(f"x:{r['id']}"))
     live.on("heartbeat", lambda _h: got.append("hb"))
     await live.connect()
-    assert ws_server["paths"][0] == f"/thesis/v1/ws/solana/{MINT}"
+    assert ws_server["paths"][0] == f"/thesis/v1/ws/solana/{MINT}?client_id=csid_app"
     for _ in range(100):
         if len(got) == 4:
             break
@@ -438,10 +503,68 @@ async def test_public_live(ws_server: dict[str, Any]) -> None:
 
 async def test_public_live_refused_is_final(ws_server: dict[str, Any]) -> None:
     ws_server["mode"] = "refuse"
-    live = ThesisClient(ws_url=f"ws://127.0.0.1:{ws_server['port']}/thesis/v1/ws").live(
+    live = ThesisClient(client_id="csid_app", ws_url=f"ws://127.0.0.1:{ws_server['port']}/thesis/v1/ws").live(
         "solana", MINT, reconnect_delay=0.01
     )
     await live.connect()
     with pytest.raises(PermissionError):
         await asyncio.wait_for(live.run_forever(), 3)
     assert len(ws_server["paths"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "reason", "cls", "expected"),
+    [
+        (4401, "client_id_required", AuthenticationError, "client_id_required"),
+        (4401, "invalid_client", AuthenticationError, "invalid_client"),
+        (4403, "origin_not_allowed", PermissionError, "origin_not_allowed"),
+    ],
+)
+async def test_public_live_client_id_refusals_are_final(
+    ws_server: dict[str, Any], code: int, reason: str, cls: type[Exception], expected: str
+) -> None:
+    ws_server["mode"] = "close"
+    ws_server["close"] = (code, reason)
+    live = ThesisClient(client_id="csid_app", ws_url=f"ws://127.0.0.1:{ws_server['port']}/thesis/v1/ws").live(
+        "solana", MINT, reconnect_delay=0.01
+    )
+    errors: list[Any] = []
+    live.on("error", errors.append)
+    await live.connect()
+    with pytest.raises(cls) as e:
+        await asyncio.wait_for(live.run_forever(), 3)
+    assert getattr(e.value, "code", None) == expected
+    assert [getattr(x, "code", None) for x in errors] == [expected]
+    await asyncio.sleep(0.1)
+    assert len(ws_server["paths"]) == 1  # no reconnect
+
+
+async def test_public_live_rate_limited_backs_off(ws_server: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from cabalspy_id import _thesis
+
+    ws_server["mode"] = "close"
+    ws_server["close"] = (4429, "rate_limited")
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(_thesis.asyncio, "sleep", fake_sleep)
+    live = ThesisClient(client_id="csid_app", ws_url=f"ws://127.0.0.1:{ws_server['port']}/thesis/v1/ws").live(
+        "solana", MINT, reconnect_delay=0.01
+    )
+    errors: list[Any] = []
+    live.on("error", errors.append)
+    await live.connect()
+    for _ in range(200):
+        if len(ws_server["paths"]) >= 2:
+            break
+        await real_sleep(0.01)
+    await live.close()
+    assert isinstance(errors[0], RateLimitError) and errors[0].code == "rate_limited"
+    assert errors[0].retry_after == 60
+    assert any(60 <= s < 61 for s in sleeps)  # the back-off before reconnecting
+    assert len(ws_server["paths"]) >= 2  # reconnected after the back-off
+    assert all(p.endswith("?client_id=csid_app") for p in ws_server["paths"])

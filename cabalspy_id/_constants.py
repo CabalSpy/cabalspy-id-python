@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.5.1"
+SDK_VERSION = "0.5.2"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -66,3 +66,5 @@ MAX_THESES_STREAM_TOKENS = 200
 DEFAULT_THESES_STREAM_URL = "wss://api-id.cabalspy.xyz/v1/theses/stream"
 DEFAULT_THESIS_URL = "https://id.cabalspy.xyz/thesis/v1"
 DEFAULT_THESIS_WS_URL = "wss://id.cabalspy.xyz/thesis/v1/ws"
+#: Header that carries the instance's public client_id on every public thesis API call.
+CLIENT_ID_HEADER = "X-CSID-Client-Id"
