@@ -123,6 +123,28 @@ claims = auth.verify_id_token(id_token_from_the_browser)
 
 A runnable server is in [examples/login_server.py](examples/login_server.py).
 
+## Users without X
+
+People can sign in to CabalSpy ID with **X, Telegram or Google**. Accounts without X can do everything except earn the KOL badge, and connecting X later fills in their profile. For them:
+
+| Field | With X | Without X |
+|---|---|---|
+| `preferred_username` (claims) / `username` | X handle, e.g. `alice` | `tg.<telegram name>` (Telegram) or `id.<hex>` (Google) — always contains a dot |
+| `x` (userinfo, `/v1/profile`) | X profile / stats | `None` |
+| `twitter` (profiles, trading profile blocks, leaderboards) | `https://x.com/<handle>` | `None` |
+| `telegram` (profiles, trading profile blocks, leaderboards) | `https://t.me/<name>` or `""` | `https://t.me/<name>` or `""` |
+| `name`, `picture` / `image_url` | from X | from Telegram or Google |
+
+`profile_url` (`https://id.cabalspy.xyz/u/<handle>`) works for everyone. Thesis authors use the same handles.
+
+```python
+from cabalspy_id import has_x, handle_kind
+
+has_x(claims)              # False for Telegram/Google sign-ins
+handle_kind("tg.alice")    # "telegram"
+x_link = profile["twitter"]  # None without X: never build x.com links from tg./id. handles
+```
+
 ## Data API
 
 ```python

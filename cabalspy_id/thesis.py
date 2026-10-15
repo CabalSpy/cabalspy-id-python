@@ -33,6 +33,7 @@ from cabalspy_id import (
     CabalSpyID,
     CabalSpyIDError,
     Chain,
+    HandleKind,
     HeaderSource,
     InvalidResponseError,
     NotFoundError,
@@ -64,6 +65,8 @@ from cabalspy_id import (
     TokenThesesPage,
     WebhookEvent,
     WebhookVerificationError,
+    handle_kind,
+    has_x,
     sign_webhook,
     verify_webhook,
 )
@@ -85,6 +88,9 @@ __all__ = [
     "verify_webhook",
     "sign_webhook",
     "HeaderSource",
+    "has_x",
+    "handle_kind",
+    "HandleKind",
     # errors
     "CabalSpyIDError",
     "BadRequestError",

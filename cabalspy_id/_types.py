@@ -89,8 +89,12 @@ class Profile(TypedDict):
     name: str | None
     image_url: str | None
     bio: str | None
-    twitter: str
-    x: XStats
+    #: https://x.com/<handle>; None for people without X.
+    twitter: str | None
+    #: https://t.me/<name> when Telegram is connected, else "".
+    telegram: str
+    #: None for people who signed in with Telegram or Google and have not connected X.
+    x: XStats | None
     kol: KolBadge
     profile_url: str
     wallets: list[VerifiedWallet]
@@ -103,8 +107,12 @@ class WalletOwner(TypedDict):
     name: str | None
     image_url: str | None
     bio: str | None
-    twitter: str
-    x: XStats
+    #: https://x.com/<handle>; None for people without X.
+    twitter: str | None
+    #: https://t.me/<name> when Telegram is connected, else "".
+    telegram: str
+    #: None for people who signed in with Telegram or Google and have not connected X.
+    x: XStats | None
     kol: KolBadge
     profile_url: str
     joined_at: str | None
@@ -125,7 +133,9 @@ class TraderProfile(TypedDict, total=False):
     username: str
     name: str | None
     image_url: str | None
-    twitter: str
+    #: https://x.com/<handle>; None for people without X.
+    twitter: str | None
+    #: https://t.me/<name> when Telegram is connected, else "".
     telegram: str
     blockchain: Chain
     currency: Currency
@@ -369,7 +379,9 @@ class LeaderboardProfile(TypedDict):
     username: str
     name: str | None
     image_url: str | None
-    twitter: str
+    #: https://x.com/<handle>; None for people without X.
+    twitter: str | None
+    #: https://t.me/<name> when Telegram is connected, else "".
     telegram: str
     blockchain: Chain
     currency: Currency
@@ -497,13 +509,14 @@ class CabalSpyIDClaims(TypedDict, total=False):
     auth_time: int
     nonce: str
     name: str | None
+    #: X handle; without X ``tg.<telegram name>`` (Telegram) or ``id.<hex>`` (Google). X handles never contain a dot.
     preferred_username: str
     picture: str | None
     #: https://id.cabalspy.xyz/u/<username>
     profile: str
     kol_badge: bool
-    #: Full X profile, userinfo only (scope profile).
-    x: XProfileClaim
+    #: Full X profile, userinfo only (scope profile). None without X; see has_x().
+    x: XProfileClaim | None
     #: Verified wallets, userinfo only (scope wallets).
     wallets: list[WalletClaim]
     #: Latest 7-day on-chain volume, userinfo only (scope onchain).

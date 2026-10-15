@@ -124,6 +124,7 @@ from ._types import (
     WinRateDistribution,
     XProfileClaim,
 )
+from ._users import HandleKind, handle_kind, has_x
 from ._webhooks import HeaderSource, sign_webhook, verify_webhook
 
 __version__ = SDK_VERSION
@@ -160,6 +161,9 @@ __all__ = [
     "verify_webhook",
     "sign_webhook",
     "HeaderSource",
+    "has_x",
+    "handle_kind",
+    "HandleKind",
     "ThesisClient",
     "AsyncThesisClient",
     "ThesisLive",
