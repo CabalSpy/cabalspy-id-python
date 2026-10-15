@@ -83,11 +83,12 @@ class BadRequestError(CabalSpyIDError):
 
 
 class AuthenticationError(CabalSpyIDError):
-    """401 — missing_api_key."""
+    """401 — missing_api_key; public thesis API: client_id_required, invalid_client."""
 
 
 class PermissionError_(CabalSpyIDError):
-    """403 — invalid_api_key, product_not_enabled, no_instance, scope_not_allowed."""
+    """403 — invalid_api_key, product_not_enabled, no_instance, scope_not_allowed;
+    public thesis API: origin_not_allowed."""
 
 
 class PlanUserLimitError(PermissionError_):
@@ -105,7 +106,7 @@ class NotFoundError(CabalSpyIDError):
 
 
 class RateLimitError(CabalSpyIDError):
-    """429 — rate_limit_exceeded."""
+    """429 — rate_limit_exceeded; public thesis API: rate_limited (Retry-After 60)."""
 
     def __init__(self, message: str, *, retry_after: float | None = None, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)

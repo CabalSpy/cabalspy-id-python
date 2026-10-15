@@ -22,7 +22,7 @@ pip install "cabalspy-id[stream]"
 |---|---|
 | `CabalSpyIDAuth` / `AsyncCabalSpyIDAuth` | OpenID Connect for your server: PKCE, code exchange, refresh, revoke, userinfo, ID token verification (ES256 / JWKS) |
 | `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream |
-| `ThesisClient` / `AsyncThesisClient` | public token thesis API with a user's access token, plus `live()` updates |
+| `ThesisClient` / `AsyncThesisClient` | public token thesis API with your public `client_id` and a user's access token, plus `live()` updates |
 | `verify_webhook` | Standard Webhooks signature verification |
 
 Sync and async, fully typed (`py.typed`, `TypedDict` responses). Python 3.10+.
@@ -249,7 +249,9 @@ A thesis is a short opinion on a token (up to 1000 characters), optionally tagge
 
 Writing needs the scope **`thesis`** in your login (`scope=["openid", "profile", "thesis"]`).
 
-**Scope of reads.** Theses are shared across platforms. Every read (`list_theses`, `thesis_summary`, `latest_theses`, `ThesisClient`, the widget, the live sockets) takes `scope`: `global` (default, every platform) or `instance` (only theses written on your instance). In the Data API your key decides the instance; the public API and widget need your `client_id`.
+**Scope of reads.** Theses are shared across platforms. Every read (`list_theses`, `thesis_summary`, `latest_theses`, `ThesisClient`, the widget, the live sockets) takes `scope`: `global` (default, every platform) or `instance` (only theses written on your instance). In the Data API your key decides the instance; the public API and widget use your `client_id`.
+
+**Your public `client_id` is required** for the public thesis API (`ThesisClient`, `AsyncThesisClient`, `ThesisLive`) and the theses widget. It is your instance's client_id (`csid_...`), shown in the dashboard next to the API key. It is public, not a secret and **not the API key** (the API key must never reach a browser). The SDK sends it as the `X-CSID-Client-Id` header on every call to `https://id.cabalspy.xyz/thesis/v1/...` and as `client_id` on the live socket URL (`wss://id.cabalspy.xyz/thesis/v1/ws/{chain}/{mint}?client_id=...`). Without it `ThesisClient()` raises `AuthenticationError` with `code == "client_id_required"`. Browser calls must come from one of the instance's allowed origins or verified domains (instances in dev mode also allow `http://localhost:*`). The Data API (`CabalSpyID`, API key) is unchanged.
 
 ### Widget
 
@@ -329,12 +331,13 @@ Also over the trade stream (Pro plan): `csid.stream(events=["theses"], blockchai
 
 ### Public thesis API: `ThesisClient`
 
-`https://id.cabalspy.xyz/thesis/v1` needs no API key: reading is open, writing uses the user's access token (scope `thesis`).
+`https://id.cabalspy.xyz/thesis/v1` needs no API key, only your public `client_id` (required): reading needs nothing else, writing uses the user's access token (scope `thesis`).
 
 ```python
 from cabalspy_id import ThesisClient
 
-# client_id credits posts to your app; add scope="instance" to show only theses written on your platform
+# client_id: your instance's PUBLIC client_id from the dashboard (not the API key); it also credits
+# posts to your app. Add scope="instance" to show only theses written on your platform.
 with ThesisClient(access_token=result.tokens["access_token"], client_id="csid_...") as theses:
     page = theses.list("solana", mint, sort="top")     # items, pagination, token, summary
     if theses.me("solana", mint)["can_post"]:
@@ -345,11 +348,22 @@ with ThesisClient(access_token=result.tokens["access_token"], client_id="csid_..
 Methods: `list`, `iterate`, `summary`, `get`, `replies`, `by_user`, `me`, `post`, `reply`, `react`, `report`, `delete`, `notifications`, `mark_notifications_read`, `appeal`, `live`, `set_access_token`. `AsyncThesisClient` has the same methods as coroutines. Live updates for one token (async):
 
 ```python
-live = ThesisClient().live("solana", mint)               # also takes scope=, client_id=
+live = ThesisClient(client_id="csid_...").live("solana", mint)  # ?client_id=... (also takes scope=)
 live.on("thesis", lambda t: print("new", t["body"]))   # also: reply, reaction, removed
 await live.connect()
 await live.run_forever()
 ```
+
+client_id errors use the SDK's exception classes, so check `err.code` (docs: `https://docs.cabalspy.xyz/cabalspy-id/errors#<code>`):
+
+| Code | HTTP | Live socket close | Exception | Meaning |
+|---|---|---|---|---|
+| `client_id_required` | 401 | 4401 | `AuthenticationError` | no client_id sent |
+| `invalid_client` | 401 | 4401 | `AuthenticationError` | unknown or inactive client_id |
+| `origin_not_allowed` | 403 | 4403 | `PermissionError` | the browser's Origin is not one of the instance's allowed origins / verified domains |
+| `rate_limited` | 429 | 4429 | `RateLimitError` (`retry_after == 60`) | too many requests per client or per IP |
+
+`ThesisLive` does not reconnect after 4401 or 4403 (`run_forever()` raises the error); after 4429 it waits 60 s before reconnecting.
 
 ## Live stream
 

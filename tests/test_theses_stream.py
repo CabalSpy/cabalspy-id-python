@@ -11,7 +11,7 @@ import httpx
 import pytest
 from websockets.asyncio.server import serve
 
-from cabalspy_id import BadRequestError, CabalSpyID, PermissionError, ThesisClient
+from cabalspy_id import AuthenticationError, BadRequestError, CabalSpyID, PermissionError, ThesisClient
 
 from .conftest import Recorder, ok
 
@@ -213,7 +213,11 @@ def test_public_client_scope_and_attribution() -> None:
     assert qs == [{"scope": ["instance"], "client_id": ["csid_app"]}, {"scope": ["global"]}]
     assert json.loads(rec.requests[2].content) == {"body": "gm", "client_id": "csid_app"}
     assert json.loads(rec.requests[3].content) == {"body": "yes", "client_id": "csid_app"}
-    assert tc.live("solana", MINT).url.endswith(f"/ws/solana/{MINT}?scope=instance&client_id=csid_app")
-    assert ThesisClient().live("solana", MINT, scope="global").url.endswith("?scope=global")
-    with pytest.raises(BadRequestError):
+    assert tc.live("solana", MINT).url.endswith(f"/ws/solana/{MINT}?client_id=csid_app&scope=instance")
+    assert (
+        ThesisClient(client_id="csid_app")
+        .live("solana", MINT, scope="global")
+        .url.endswith("?client_id=csid_app&scope=global")
+    )
+    with pytest.raises(AuthenticationError):
         ThesisClient(scope="instance")

@@ -84,7 +84,7 @@ def public(r: httpx.Request) -> httpx.Response:
 
 def test_public_notifications() -> None:
     rec = Recorder(public)
-    tc = ThesisClient("at", http_client=rec.client())
+    tc = ThesisClient("at", client_id="csid_app", http_client=rec.client())
     assert tc.notifications()["items"][0]["kind"] == "post_hidden"
     tc.mark_notifications_read()
     tc.appeal(7, "Please look again, this was a real analysis.")
@@ -100,11 +100,11 @@ def test_public_notifications() -> None:
     ]
     assert all(r.headers["authorization"] == "Bearer at" for r in rec.requests)
     with pytest.raises(AuthenticationError):
-        ThesisClient(http_client=rec.client()).notifications()
+        ThesisClient(client_id="csid_app", http_client=rec.client()).notifications()
 
 
 async def test_async_public_notifications() -> None:
-    async with AsyncThesisClient("at", http_client=Recorder(public).async_client()) as tc:
+    async with AsyncThesisClient("at", client_id="csid_app", http_client=Recorder(public).async_client()) as tc:
         assert (await tc.notifications())["unread"] == 1
         assert (await tc.mark_notifications_read())["read"] is True
         assert (await tc.appeal(7, "Please look again."))["appealed"] is True

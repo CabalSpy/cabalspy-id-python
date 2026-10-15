@@ -1,18 +1,21 @@
 """Public thesis API: https://id.cabalspy.xyz/thesis/v1 (no API key).
 
-Reading needs nothing. Writing uses the signed-in user's CabalSpy ID access
-token with the scope "thesis" (``result.tokens["access_token"]`` after login).
+Every call carries your instance's PUBLIC client_id (``csid_...``, shown in the
+dashboard next to the API key; not the API key): header ``X-CSID-Client-Id``,
+and ``client_id`` on the websocket URL. Reading needs nothing else. Writing uses
+the signed-in user's CabalSpy ID access token with the scope "thesis"
+(``result.tokens["access_token"]`` after login).
 
     from cabalspy_id import ThesisClient
 
-    theses = ThesisClient(access_token=tokens["access_token"])
+    theses = ThesisClient(tokens["access_token"], client_id="csid_...")
     page = theses.list("solana", mint, sort="top")
     if theses.me("solana", mint)["can_post"]:
         theses.post("solana", mint, body="Strong community, still early.", stance="bull")
 
 Live updates for one token (async, needs the ``stream`` extra):
 
-    live = AsyncThesisClient().live("solana", mint)
+    live = AsyncThesisClient(client_id="csid_...").live("solana", mint)
     live.on("thesis", print)
     await live.connect()
     await live.run_forever()
@@ -34,6 +37,7 @@ import httpx
 
 from ._constants import (
     CHAINS,
+    CLIENT_ID_HEADER,
     DEFAULT_THESIS_URL,
     DEFAULT_THESIS_WS_URL,
     THESIS_EMOJIS,
@@ -54,10 +58,82 @@ from ._errors import (
     InvalidResponseError,
     PermissionError_,
     RateLimit,
+    RateLimitError,
     error_from_status,
 )
 
-__all__ = ["ThesisClient", "AsyncThesisClient", "ThesisLive", "TokenThesesPage", "ThesisPage", "LIVE_EVENTS"]
+__all__ = [
+    "ThesisClient",
+    "AsyncThesisClient",
+    "ThesisLive",
+    "TokenThesesPage",
+    "ThesisPage",
+    "LIVE_EVENTS",
+    "WS_CLOSE_CLIENT",
+    "WS_CLOSE_ORIGIN",
+    "WS_CLOSE_RATE_LIMITED",
+    "thesis_close_error",
+]
+
+#: Live socket close codes for the client_id checks (the close reason is the error code).
+WS_CLOSE_CLIENT = 4401  # client_id_required / invalid_client: final
+WS_CLOSE_ORIGIN = 4403  # origin_not_allowed: final
+WS_CLOSE_RATE_LIMITED = 4429  # rate_limited: reconnect after 60 s
+#: Seconds to wait after a 4429 close (the server's Retry-After).
+RATE_LIMIT_BACKOFF = 60.0
+
+_DOCS = "https://docs.cabalspy.xyz/cabalspy-id/errors#"
+
+_CLIENT_ID_REQUIRED = (
+    "ThesisClient needs your instance's public client_id (csid_..., shown in the dashboard next to the "
+    'API key): ThesisClient(client_id="csid_..."). It is not the API key; never put the API key in a browser.'
+)
+
+
+def _require_client_id(client_id: Any) -> str:
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise AuthenticationError(
+            _CLIENT_ID_REQUIRED,
+            code="client_id_required",
+            parameter="client_id",
+            docs=f"{_DOCS}client_id_required",
+        )
+    return client_id.strip()
+
+
+def thesis_close_error(code: int | None, reason: str | None = None) -> CabalSpyIDError | None:
+    """The error for a refusing close code of the public live socket, or None for an ordinary close."""
+    if code == WS_CLOSE_CLIENT:
+        c = "invalid_client" if reason == "invalid_client" else "client_id_required"
+        msg = (
+            "The live socket was refused (4401): unknown or inactive client_id"
+            if c == "invalid_client"
+            else "The live socket was refused (4401): your instance's public client_id is required"
+        )
+        return AuthenticationError(msg, code=c, status=401, docs=f"{_DOCS}{c}")
+    if code == WS_CLOSE_ORIGIN:
+        return PermissionError_(
+            "The live socket was refused (4403): this origin is not one of the instance's allowed origins",
+            code="origin_not_allowed",
+            status=403,
+            docs=f"{_DOCS}origin_not_allowed",
+        )
+    if code == WS_CLOSE_RATE_LIMITED:
+        return RateLimitError(
+            "The live socket was refused (4429): rate limited; reconnecting in 60 s",
+            code="rate_limited",
+            status=429,
+            docs=f"{_DOCS}rate_limited",
+            retry_after=RATE_LIMIT_BACKOFF,
+        )
+    if code == 1008:
+        return PermissionError_(
+            "The live socket was refused (1008): invalid token address or too many sockets from this IP",
+            code="ws_refused",
+            status=403,
+        )
+    return None
+
 
 #: Events of the public live socket.
 LIVE_EVENTS = ("thesis", "reply", "reaction", "removed", "heartbeat", "open", "close", "error")
@@ -114,17 +190,19 @@ class _ThesisBase:
         self,
         access_token: str | None = None,
         *,
-        scope: ThesisScope | None = None,
         client_id: str | None = None,
+        scope: ThesisScope | None = None,
         base_url: str = DEFAULT_THESIS_URL,
         ws_url: str = DEFAULT_THESIS_WS_URL,
         timeout: float = 15.0,
     ) -> None:
+        client_id = _require_client_id(client_id)
         _scope_query(scope, client_id)
-        #: global (default) or instance: only theses written on ``client_id``'s instance.
+        #: global (default) or instance: only theses written on your instance.
         self.scope = scope
-        #: Your instance's client_id: needed for scope="instance"; also credits posts to your app.
-        self.client_id = client_id
+        #: Required. Your instance's PUBLIC client_id (not the API key): sent as ``X-CSID-Client-Id``
+        #: on every call and as ``client_id`` on the live socket; also credits posts to your app.
+        self.client_id: str = client_id
         self._access_token = access_token
         self.base_url = base_url.rstrip("/")
         self.ws_url = ws_url.rstrip("/")
@@ -141,7 +219,7 @@ class _ThesisBase:
                 status=401,
                 code="sign_in_required",
             )
-        headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
+        headers = {"Accept": "application/json", "User-Agent": USER_AGENT, CLIENT_ID_HEADER: self.client_id}
         if auth and self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"
         return headers
@@ -154,11 +232,16 @@ class _ThesisBase:
             parsed = None
         if response.status_code >= 400 or (isinstance(parsed, dict) and parsed.get("success") is False):
             err = parsed.get("error") if isinstance(parsed, dict) else None
+            retry_after: float | None
+            try:
+                retry_after = float(response.headers["Retry-After"])
+            except (KeyError, ValueError):
+                retry_after = None
             raise error_from_status(
                 response.status_code,
                 err if isinstance(err, dict) else None,
                 RateLimit(),
-                None,
+                retry_after,
                 f"HTTP {response.status_code} on {label}",
             )
         if not isinstance(parsed, dict) or "data" not in parsed:
@@ -204,7 +287,7 @@ class _ThesisBase:
         return _scope_query(scope or self.scope, client_id or self.client_id)
 
     def _attributed(self, body: dict[str, Any]) -> dict[str, Any]:
-        return {**body, "client_id": self.client_id} if self.client_id else body
+        return {**body, "client_id": self.client_id}
 
     def live(
         self,
@@ -217,11 +300,11 @@ class _ThesisBase:
     ) -> ThesisLive:
         """Live updates for one token over the public websocket (async): thesis, reply, reaction, removed.
 
-        With ``scope="instance"`` (and ``client_id``) only theses written on that instance.
+        The socket URL carries ``client_id``. With ``scope="instance"`` only theses written on your instance.
         """
         path = _token_path(chain, mint).removeprefix("/tokens")
-        query = urlencode(self._scope(scope, client_id))
-        return ThesisLive(f"{self.ws_url}{path}" + (f"?{query}" if query else ""), **kwargs)
+        query = urlencode({"client_id": self.client_id, **self._scope(scope, client_id)})
+        return ThesisLive(f"{self.ws_url}{path}?{query}", **kwargs)
 
 
 class ThesisClient(_ThesisBase):
@@ -555,7 +638,9 @@ class AsyncThesisClient(_ThesisBase):
 class ThesisLive:
     """Public live socket for one token (async). Events: thesis, reply, reaction,
     removed, heartbeat, open, close, error. Reconnects after drops or missed
-    heartbeats; close code 1008 (invalid token, too many sockets) is final."""
+    heartbeats. Close codes 1008 (invalid token, too many sockets), 4401
+    (client_id missing or invalid) and 4403 (origin not allowed) are final;
+    after 4429 (rate limited) it waits 60 s before reconnecting."""
 
     def __init__(
         self,
@@ -666,18 +751,20 @@ class ThesisLive:
             if self._ws is ws:
                 self._ws = None
         await self._emit("close", info)
-        if info.get("code") == 1008:
-            self._final = PermissionError_(
-                "The live socket was refused (1008): invalid token address or too many sockets from this IP",
-                code="ws_refused",
-                status=403,
-            )
-            await self._emit("error", self._final)
+        refusal = thesis_close_error(info.get("code"), info.get("reason"))
+        rate_limited = info.get("code") == WS_CLOSE_RATE_LIMITED
+        if refusal is not None:
+            if not rate_limited:
+                self._final = refusal
+            await self._emit("error", refusal)
         if self._closed or self._final or not self.reconnect:
             self._done.set()
             return
+        min_delay = RATE_LIMIT_BACKOFF if rate_limited else 0.0
         while not self._closed:
-            delay = min(self.reconnect_delay * (2**self._attempt), self.max_reconnect_delay) + random.random() * 0.25
+            backoff = min(self.reconnect_delay * (2**self._attempt), self.max_reconnect_delay)
+            delay = max(min_delay, backoff) + random.random() * 0.25
+            min_delay = 0.0
             self._attempt += 1
             await asyncio.sleep(delay)
             if self._closed:
