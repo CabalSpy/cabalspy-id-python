@@ -1,6 +1,7 @@
 """``cabalspy_id.api`` — the SocialFi API: Data API clients (users, profiles,
-verified wallets, trading stats, leaderboards), the live trade stream, Login
-with CabalSpy ID (OpenID Connect) and webhook verification.
+verified wallets, trading stats, leaderboards, Trade Feed), the live trade and
+Trade Feed streams, Login with CabalSpy ID (OpenID Connect) and webhook
+verification.
 
     from cabalspy_id.api import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -16,11 +17,15 @@ from cabalspy_id import (
     DEFAULT_BASE_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
+    DEFAULT_TRADE_FEED_STREAM_URL,
     LEADERBOARD_SORTS,
     PERIODS,
     SCOPES,
     SDK_VERSION,
     STREAM_TOPICS,
+    TRADE_FEED_EVENTS,
+    TRADE_FEED_FILTERS,
+    TRADE_FEED_MAX_TRADERS,
     WEBHOOK_EVENTS,
     ActiveHoldings,
     ActiveTokens,
@@ -79,6 +84,28 @@ from cabalspy_id import (
     TrackerResponse,
     TrackerTrade,
     Trade,
+    TradeFeedAddResult,
+    TradeFeedEntry,
+    TradeFeedEvent,
+    TradeFeedEventData,
+    TradeFeedEventType,
+    TradeFeedFilter,
+    TradeFeedItem,
+    TradeFeedLabel,
+    TradeFeedLinks,
+    TradeFeedMinNative,
+    TradeFeedNotification,
+    TradeFeedRemoveResult,
+    TradeFeedSettings,
+    TradeFeedThesis,
+    TradeFeedThesisData,
+    TradeFeedThesisEvent,
+    TradeFeedThesisItem,
+    TradeFeedTrade,
+    TradeFeedTradeData,
+    TradeFeedTradeEvent,
+    TradeFeedTradeItem,
+    TradeFeedTrader,
     TradeOwner,
     TraderProfile,
     VerifiedWallet,
@@ -93,6 +120,9 @@ from cabalspy_id import (
     handle_kind,
     has_x,
     is_limited,
+    is_trade_feed_event,
+    is_trade_feed_thesis_event,
+    is_trade_feed_trade_event,
     sign_webhook,
     verify_webhook,
 )
@@ -106,6 +136,7 @@ __all__ = [
     "CabalSpyID",
     "AsyncCabalSpyID",
     "CabalSpyIDStream",
+    "TradeFeedStream",
     "Envelope",
     "CabalSpyIDAuth",
     "AsyncCabalSpyIDAuth",
@@ -116,6 +147,9 @@ __all__ = [
     "is_limited",
     "verify_webhook",
     "sign_webhook",
+    "is_trade_feed_event",
+    "is_trade_feed_trade_event",
+    "is_trade_feed_thesis_event",
     "HeaderSource",
     "has_x",
     "handle_kind",
@@ -146,6 +180,14 @@ __all__ = [
     "STREAM_TOPICS",
     "DEFAULT_BASE_URL",
     "DEFAULT_STREAM_URL",
+    "DEFAULT_TRADE_FEED_STREAM_URL",
+    "TRADE_FEED_EVENTS",
+    "TRADE_FEED_FILTERS",
+    "TRADE_FEED_MAX_TRADERS",
+    "TRADE_FEED_STREAM_EVENTS",
+    "TradeFeedFilter",
+    "TradeFeedLabel",
+    "TradeFeedEventType",
     "DEFAULT_ISSUER",
     "Chain",
     "Period",
@@ -191,11 +233,30 @@ __all__ = [
     "TokenResponse",
     "DiscoveryDocument",
     "WebhookEvent",
+    "TradeFeedTrader",
+    "TradeFeedTrade",
+    "TradeFeedThesis",
+    "TradeFeedLinks",
+    "TradeFeedTradeItem",
+    "TradeFeedThesisItem",
+    "TradeFeedItem",
+    "TradeFeedMinNative",
+    "TradeFeedSettings",
+    "TradeFeedEntry",
+    "TradeFeedAddResult",
+    "TradeFeedRemoveResult",
+    "TradeFeedNotification",
+    "TradeFeedTradeData",
+    "TradeFeedThesisData",
+    "TradeFeedEventData",
+    "TradeFeedTradeEvent",
+    "TradeFeedThesisEvent",
+    "TradeFeedEvent",
 ]
 
 
 def __getattr__(name: str) -> Any:
     # The stream needs the optional websockets dependency: loaded lazily, like the root package.
-    if name in ("CabalSpyIDStream", "STREAM_EVENTS"):
+    if name in ("CabalSpyIDStream", "STREAM_EVENTS", "TradeFeedStream", "TRADE_FEED_STREAM_EVENTS"):
         return getattr(_root, name)
     raise AttributeError(f"module 'cabalspy_id.api' has no attribute {name!r}")

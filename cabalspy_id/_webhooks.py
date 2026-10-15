@@ -15,12 +15,24 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Iterable
-from typing import Any, Protocol
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ._errors import WebhookVerificationError
 
-__all__ = ["verify_webhook", "sign_webhook", "HeaderSource"]
+if TYPE_CHECKING:
+    from typing import TypeGuard
+
+    from ._types import TradeFeedEvent, TradeFeedThesisEvent, TradeFeedTradeEvent
+
+__all__ = [
+    "verify_webhook",
+    "sign_webhook",
+    "HeaderSource",
+    "is_trade_feed_event",
+    "is_trade_feed_trade_event",
+    "is_trade_feed_thesis_event",
+]
 
 
 class HeaderSource(Protocol):
@@ -114,3 +126,22 @@ def verify_webhook(
     if not isinstance(event, dict):
         raise WebhookVerificationError("Webhook body is not a JSON object", code="invalid_payload")
     return event
+
+
+# ── Trade Feed events ────────────────────────────────────────────────────────
+
+
+def is_trade_feed_trade_event(event: Mapping[str, Any]) -> TypeGuard[TradeFeedTradeEvent]:
+    """True for a ``trade_feed.trade`` event: a trader in your users' Trade Feeds
+    traded; ``event["data"]["recipients"]`` are the users to tell."""
+    return isinstance(event, Mapping) and event.get("type") == "trade_feed.trade"
+
+
+def is_trade_feed_thesis_event(event: Mapping[str, Any]) -> TypeGuard[TradeFeedThesisEvent]:
+    """True for a ``trade_feed.thesis`` event: a trader in your users' Trade Feeds posted a thesis."""
+    return isinstance(event, Mapping) and event.get("type") == "trade_feed.thesis"
+
+
+def is_trade_feed_event(event: Mapping[str, Any]) -> TypeGuard[TradeFeedEvent]:
+    """True for any Trade Feed event (``trade_feed.trade`` or ``trade_feed.thesis``)."""
+    return isinstance(event, Mapping) and event.get("type") in ("trade_feed.trade", "trade_feed.thesis")
