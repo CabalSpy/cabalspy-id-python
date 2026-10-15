@@ -4,6 +4,34 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-10-15
+
+Trade Feed: your users add CabalSpy ID traders (public trading, verified wallets) to their Trade
+Feed and your platform tells them about every trade and thesis of those traders. Needs the new
+OIDC scope `trade_feed`. Nothing existing changed.
+
+### Added
+
+- Data API methods in a user's name (`csid_id`; `PermissionError` `consent_required` without the
+  scope), sync and async: `trade_feed(csid_id, filter=, limit=, cursor=)`,
+  `trade_feed_traders(csid_id, ...)`, `add_to_trade_feed(csid_id, trader, notify_buys=,
+  notify_sells=, notify_theses=, min_sol=, min_bnb=, min_eth=, muted=)` (`created` = 201 / 200),
+  `remove_from_trade_feed(csid_id, trader)`, `trade_feed_notifications(csid_id, ...)`, and
+  `iter_trade_feed`, `iter_trade_feed_traders`, `iter_trade_feed_notifications`.
+- `TradeFeedStream` (`client.trade_feed_stream()`, `wss://api-id.cabalspy.xyz/v1/trade-feed/stream`,
+  every plan, `stream` extra): `trade_feed.trade` / `trade_feed.thesis` events with
+  `data["recipients"]`, reconnect with backoff, heartbeat watchdog, `async for` yielding
+  `{"event", "id", "data"}`. Option `trade_feed_stream_url`, constant `DEFAULT_TRADE_FEED_STREAM_URL`.
+- Webhooks `trade_feed.trade` and `trade_feed.thesis` in `WEBHOOK_EVENTS`, TypedDicts
+  (`TradeFeedTradeEvent`, `TradeFeedThesisEvent`, `TradeFeedTradeData`, `TradeFeedThesisData`) and
+  type guards `is_trade_feed_event`, `is_trade_feed_trade_event`, `is_trade_feed_thesis_event`.
+- Types: `TradeFeedItem` (`TradeFeedTradeItem` | `TradeFeedThesisItem`), `TradeFeedTrader`,
+  `TradeFeedTrade`, `TradeFeedThesis`, `TradeFeedLinks`, `TradeFeedEntry`, `TradeFeedSettings`,
+  `TradeFeedAddResult`, `TradeFeedRemoveResult`, `TradeFeedNotification`, `TradeFeedFilter`,
+  `TradeFeedLabel`, `TRADE_FEED_FILTERS`, `TRADE_FEED_EVENTS`, `TRADE_FEED_MAX_TRADERS`;
+  `OidcScope` includes `trade_feed`.
+- New module `cabalspy_id.trade_feed`; `cabalspy_id.api` exports the Trade Feed parts too.
+
 ## [0.5.2] - 2026-10-15
 
 The public thesis API (`https://id.cabalspy.xyz/thesis/v1/...`) and its live socket
@@ -121,6 +149,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.6.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.4.1...v0.5.0

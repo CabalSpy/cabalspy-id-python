@@ -21,7 +21,8 @@ pip install "cabalspy-id[stream]"
 | | |
 |---|---|
 | `CabalSpyIDAuth` / `AsyncCabalSpyIDAuth` | OpenID Connect for your server: PKCE, code exchange, refresh, revoke, userinfo, ID token verification (ES256 / JWKS) |
-| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream |
+| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream, Trade Feed |
+| `TradeFeedStream` | live Trade Feed events of your users (`trade_feed.trade`, `trade_feed.thesis`) |
 | `ThesisClient` / `AsyncThesisClient` | public token thesis API with your public `client_id` and a user's access token, plus `live()` updates |
 | `verify_webhook` | Standard Webhooks signature verification |
 
@@ -34,6 +35,7 @@ Everything for developers — instance (client_id), client secrets, redirect URI
 - **Social trading feed** — every trade of your users live, with their X profile and PnL
 - **Leaderboards** — rank your users by PnL, volume, win rate or trades
 - **Copy trading** — follow verified wallets of real, identified traders
+- **Trade Feed** — your users add traders to their Trade Feed; you notify them of every trade and thesis of those traders
 - **Token theses** — holders-only opinions on a token with the author's real position, as a SocialFi widget or your own UI
 - **Trader profiles** — X profile, verified wallets, holdings, PnL calendar
 - **KOL badges** — reviewed badges for influential traders, shown wherever they sign in
@@ -45,9 +47,9 @@ One codebase, one version line. The focused packages re-export parts of `cabalsp
 | Package | npm | PyPI | What it contains |
 |---|---|---|---|
 | **cabalspy-id** | [`cabalspy-id`](https://www.npmjs.com/package/cabalspy-id) | [`cabalspy-id`](https://pypi.org/project/cabalspy-id/) | everything below |
-| **socialfi-api** ([repo](https://github.com/CabalSpy/socialfi-api)) | [`socialfi-api`](https://www.npmjs.com/package/socialfi-api) | [`socialfi-api`](https://pypi.org/project/socialfi-api/) | the SocialFi API: Data API, Login with CabalSpy ID, trade stream, webhooks (= `cabalspy-id/api`, `cabalspy_id.api`) |
+| **socialfi-api** ([repo](https://github.com/CabalSpy/socialfi-api)) | [`socialfi-api`](https://www.npmjs.com/package/socialfi-api) | [`socialfi-api`](https://pypi.org/project/socialfi-api/) | the SocialFi API: Data API, Login with CabalSpy ID, trade and Trade Feed streams, webhooks (= `cabalspy-id/api`, `cabalspy_id.api`) |
 | **socialfi-thesis** ([repo](https://github.com/CabalSpy/socialfi-thesis)) | [`socialfi-thesis`](https://www.npmjs.com/package/socialfi-thesis) | [`socialfi-thesis`](https://pypi.org/project/socialfi-thesis/) | token theses: Data API thesis methods, public thesis client, theses stream (= `cabalspy-id/thesis`, `cabalspy_id.thesis`) |
-| **socialfi-widget** ([repo](https://github.com/CabalSpy/socialfi-widget)) | [`socialfi-widget`](https://www.npmjs.com/package/socialfi-widget) | – | the browser SocialFi widgets: login button and theses widget, vanilla and React (= `cabalspy-id/widget`) |
+| **socialfi-widget** ([repo](https://github.com/CabalSpy/socialfi-widget)) | [`socialfi-widget`](https://www.npmjs.com/package/socialfi-widget) | – | the browser SocialFi widgets: login button, theses widget and Trade Feed widgets, vanilla and React (= `cabalspy-id/widget`) |
 
 ### Modules
 
@@ -56,6 +58,7 @@ One codebase, one version line. The focused packages re-export parts of `cabalsp
 | `cabalspy_id` | everything |
 | `cabalspy_id.api` | `CabalSpyID`, `AsyncCabalSpyID`, `CabalSpyIDStream`, `CabalSpyIDAuth`, `verify_webhook`, errors and Data API types |
 | `cabalspy_id.thesis` | `CabalSpyID` (thesis methods), `ThesisClient`, `AsyncThesisClient`, `ThesisLive`, `ThesesStream`, thesis types |
+| `cabalspy_id.trade_feed` | `CabalSpyID` (Trade Feed methods), `TradeFeedStream`, `verify_webhook`, `is_trade_feed_event` / `is_trade_feed_trade_event` / `is_trade_feed_thesis_event`, Trade Feed types |
 
 The objects are the same as in `cabalspy_id`.
 
@@ -365,6 +368,100 @@ client_id errors use the SDK's exception classes, so check `err.code` (docs: `ht
 
 `ThesisLive` does not reconnect after 4401 or 4403 (`run_forever()` raises the error); after 4429 it waits 60 s before reconnecting.
 
+## Trade Feed
+
+Your users add CabalSpy ID traders to their **Trade Feed** and your platform tells them about every trade and thesis of those traders. Only traders whose trading is public can be added (nobody can add themselves, at most 300 traders per person); a trader who switches to private disappears from every Trade Feed until they are public again. Verified wallet addresses are public, so trades carry the wallet and explorer links.
+
+Each trade is labelled by what it did to the trader's position in the token: `new` (first buy, or a buy after closing), `add`, `partial` (with `sold_percent`), `close`, or `sell` (entry unknown); sells with a known entry carry the realized `pnl_usd` / `pnl_percent`. Per trader each person filters buys / sells / theses, sets a minimum size per native coin (`min_sol`, `min_bnb`, `min_eth`) or mutes; new traders start with the person's defaults.
+
+Everything happens **in the name of one of your users**: they must sign in to an app of your instance with the scope **`trade_feed`** (otherwise `consent_required`, 403).
+
+**The platform flow:**
+
+1. The user signs in with `scope=["openid", "profile", "trade_feed"]`.
+2. You add a trader to their Trade Feed (Data API, or the "+ Trade Feed" widget on your site).
+3. The trader trades: you receive a `trade_feed.trade` webhook (or stream event) with `data["recipients"]`, the `csid_id`s of your users whose filters it passed.
+4. You notify those users in your app.
+
+```python
+from cabalspy_id import CabalSpyID, is_trade_feed_trade_event, verify_webhook
+
+# 1. sign-in with the scope trade_feed (CabalSpyIDAuth, see "Server-side login")
+req = auth.create_authorization_url(scope=["openid", "profile", "trade_feed"])
+# ... in the callback: result = auth.handle_callback(...); result.claims["sub"] is the user's csid_id
+
+# 2. add a trader (handle with or without @, or csid_id); settings are optional
+csid = CabalSpyID()
+added = csid.add_to_trade_feed(result.claims["sub"], "@alice", notify_theses=False, min_sol=0.5)
+print(added["created"], added["trader"]["username"], added["settings"])
+
+# 3. + 4. the webhook names your users to notify
+event = verify_webhook(request.body, request.headers, os.environ["CSID_WEBHOOK_SECRET"])
+if is_trade_feed_trade_event(event):
+    trader, trade = event["data"]["trader"], event["data"]["trade"]
+    verb = "bought" if trade["side"] == "buy" else "sold"
+    notify_users(event["data"]["recipients"], f"@{trader['username']} {verb} ${trade['symbol']} ({trade['label']})")
+```
+
+### Data API
+
+| Method | Endpoint |
+|---|---|
+| `trade_feed(csid_id, filter=, limit=, cursor=)` / `iter_trade_feed()` | `GET /v1/trade-feed` (`filter`: `all`, `buys`, `sells`, `theses`) |
+| `trade_feed_traders(csid_id, limit=, cursor=)` / `iter_trade_feed_traders()` | `GET /v1/trade-feed/traders` (`get_raw(...).pagination` has `total`, `max`) |
+| `add_to_trade_feed(csid_id, trader, notify_buys=, notify_sells=, notify_theses=, min_sol=, min_bnb=, min_eth=, muted=)` | `POST /v1/trade-feed/traders` (`created`: True = 201 new, False = 200 updated) |
+| `remove_from_trade_feed(csid_id, trader)` | `POST /v1/trade-feed/traders/delete` (`removed`: False when not there) |
+| `trade_feed_notifications(csid_id, limit=, cursor=)` / `iter_trade_feed_notifications()` | `GET /v1/trade-feed/notifications` (for platforms without webhooks) |
+
+`AsyncCabalSpyID` has the same methods as coroutines (and async iterators).
+
+```python
+for item in csid.iter_trade_feed(user_id, filter="buys"):
+    if item["type"] == "trade":
+        print(item["trader"]["username"], item["trade"]["label"], item["trade"]["amount_usd"], item["trade"]["wallet_url"])
+    else:
+        print(item["trader"]["username"], item["thesis"]["stance"], item["thesis"]["body"])
+```
+
+Every feed item, notification and event has the same shape (`TradeFeedItem`): `id`, `type` (`trade` | `thesis`), `timestamp`, `trader`, `trade` or `thesis`, `links` (`token`, `terminal`, `profile`); feed pages add `cursor`, events add `recipients`.
+
+Errors: `trader_not_found` (404, `NotFoundError`), `cannot_add_self` (400, `BadRequestError`), `trading_private` and `consent_required` (403, `PermissionError`), `trade_feed_full` (409, `CabalSpyIDError`), `rate_limited` (429, `RateLimitError`), `invalid_cursor` (400).
+
+### Trade Feed stream (every plan)
+
+The same events as the webhooks, live: one event per trade or thesis that concerns your users, with `data["recipients"]`. At most 5 connections per API key. Async, needs the `stream` extra.
+
+```python
+async with AsyncCabalSpyID() as csid:
+    tf = csid.trade_feed_stream()
+
+    @tf.on("trade_feed.trade")
+    async def on_trade(data):
+        await notify_users(data["recipients"], data)
+
+    await tf.connect()                               # returns on "ready"
+    await tf.run_forever()
+
+    # or iterate {"event": ..., "id": ..., "data": ...}
+    async with csid.trade_feed_stream() as tf:
+        async for ev in tf:
+            print(ev["event"], ev["data"]["recipients"])
+```
+
+Events: `ready`, `trade_feed.trade`, `trade_feed.thesis`, `heartbeat`, `pong`, `open`, `close`, `reconnecting`, `error`. It reconnects with backoff after a dropped connection or a missed heartbeat; `invalid_api_key` is fatal, `too_many_connections` is retried.
+
+### Widgets
+
+The "+ Trade Feed" button and the embedded feed run in the browser (`widget.js`, your public `client_id` required):
+
+```html
+<div data-csid-trade-feed-button data-trader="alice" data-client-id="csid_..."></div>
+<div data-csid-trade-feed data-client-id="csid_..." data-filter="all"></div>
+<script src="https://id.cabalspy.xyz/widget.js" async></script>
+```
+
+They share their sign-in with the theses widget (`CSID.tradeFeed` is the same object as `CSID.thesis`: `setAccessToken` with an access token that has the scope `trade_feed`, `setSignInHandler`). For React and typed helpers see the [TypeScript SDK](https://www.npmjs.com/package/cabalspy-id).
+
 ## Live stream
 
 Every trade of your users the moment it is indexed, with the trader's profile (Pro plan and up). Async only, needs `pip install "cabalspy-id[stream]"`.
@@ -391,16 +488,18 @@ The server sends a heartbeat every 30 seconds. The client reconnects with expone
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit.
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction`, `trade_feed.trade`, `trade_feed.thesis` — only for users within the plan's limit. The Trade Feed events carry no `sub`; `data["recipients"]` lists your users to tell (see [Trade Feed](#trade-feed)).
 
 ```python
-from cabalspy_id import verify_webhook
+from cabalspy_id import is_trade_feed_event, verify_webhook
 
 # pass the RAW body, exactly as received
 event = verify_webhook(request.body, request.headers, os.environ["CSID_WEBHOOK_SECRET"])
 
 if event["type"] == "consent.revoked":
     delete_user_data(event["data"]["sub"])
+elif is_trade_feed_event(event):                     # trade_feed.trade / trade_feed.thesis
+    notify_users(event["data"]["recipients"], event["data"])
 ```
 
 Timestamps older than 5 minutes are rejected (`tolerance=`). During a secret roll several signatures are sent; any match is accepted. Dedupe on `event["id"]`, it is the same on every retry. `sign_webhook()` builds test requests for your receiver.

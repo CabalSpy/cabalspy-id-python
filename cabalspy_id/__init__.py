@@ -1,8 +1,8 @@
 """CabalSpy ID — the verified social layer for crypto trading.
 
 Login with CabalSpy ID (OpenID Connect), the Data API for verified wallets, KOL
-badges, trading stats and token theses, the live stream, the public thesis API
-and webhook verification.
+badges, trading stats, token theses and the Trade Feed, the live streams, the
+public thesis API and webhook verification.
 
     from cabalspy_id import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -25,6 +25,7 @@ from ._constants import (
     DEFAULT_THESES_STREAM_URL,
     DEFAULT_THESIS_URL,
     DEFAULT_THESIS_WS_URL,
+    DEFAULT_TRADE_FEED_STREAM_URL,
     LEADERBOARD_SORTS,
     MAX_THESES_STREAM_TOKENS,
     PERIODS,
@@ -35,6 +36,9 @@ from ._constants import (
     THESIS_MAX_BODY,
     THESIS_REPORT_REASONS,
     THESIS_SCOPES,
+    TRADE_FEED_EVENTS,
+    TRADE_FEED_FILTERS,
+    TRADE_FEED_MAX_TRADERS,
     WEBHOOK_EVENTS,
     Chain,
     Currency,
@@ -48,6 +52,9 @@ from ._constants import (
     ThesisScope,
     ThesisSort,
     ThesisStance,
+    TradeFeedEventType,
+    TradeFeedFilter,
+    TradeFeedLabel,
 )
 from ._errors import (
     APIConnectionError,
@@ -115,6 +122,25 @@ from ._types import (
     TrackerResponse,
     TrackerTrade,
     Trade,
+    TradeFeedAddResult,
+    TradeFeedEntry,
+    TradeFeedEvent,
+    TradeFeedEventData,
+    TradeFeedItem,
+    TradeFeedLinks,
+    TradeFeedMinNative,
+    TradeFeedNotification,
+    TradeFeedRemoveResult,
+    TradeFeedSettings,
+    TradeFeedThesis,
+    TradeFeedThesisData,
+    TradeFeedThesisEvent,
+    TradeFeedThesisItem,
+    TradeFeedTrade,
+    TradeFeedTradeData,
+    TradeFeedTradeEvent,
+    TradeFeedTradeItem,
+    TradeFeedTrader,
     TradeOwner,
     TraderProfile,
     VerifiedWallet,
@@ -126,7 +152,14 @@ from ._types import (
     XProfileClaim,
 )
 from ._users import HandleKind, handle_kind, has_x
-from ._webhooks import HeaderSource, sign_webhook, verify_webhook
+from ._webhooks import (
+    HeaderSource,
+    is_trade_feed_event,
+    is_trade_feed_thesis_event,
+    is_trade_feed_trade_event,
+    sign_webhook,
+    verify_webhook,
+)
 
 __version__ = SDK_VERSION
 
@@ -141,6 +174,10 @@ def __getattr__(name: str) -> object:
         from . import _theses_stream
 
         return getattr(_theses_stream, name)
+    if name in ("TradeFeedStream", "TRADE_FEED_STREAM_EVENTS"):
+        from . import _trade_feed_stream
+
+        return getattr(_trade_feed_stream, name)
     raise AttributeError(f"module 'cabalspy_id' has no attribute {name!r}")
 
 
@@ -151,6 +188,7 @@ __all__ = [
     "AsyncCabalSpyID",
     "CabalSpyIDStream",
     "ThesesStream",
+    "TradeFeedStream",
     "Envelope",
     "CabalSpyIDAuth",
     "AsyncCabalSpyIDAuth",
@@ -161,6 +199,9 @@ __all__ = [
     "is_limited",
     "verify_webhook",
     "sign_webhook",
+    "is_trade_feed_event",
+    "is_trade_feed_trade_event",
+    "is_trade_feed_thesis_event",
     "HeaderSource",
     "has_x",
     "handle_kind",
@@ -200,6 +241,14 @@ __all__ = [
     "THESIS_SCOPES",
     "MAX_THESES_STREAM_TOKENS",
     "DEFAULT_THESES_STREAM_URL",
+    "DEFAULT_TRADE_FEED_STREAM_URL",
+    "TRADE_FEED_EVENTS",
+    "TRADE_FEED_FILTERS",
+    "TRADE_FEED_MAX_TRADERS",
+    "TRADE_FEED_STREAM_EVENTS",
+    "TradeFeedFilter",
+    "TradeFeedLabel",
+    "TradeFeedEventType",
     "ThesisScope",
     "THESIS_EMOJIS",
     "THESIS_REPORT_REASONS",
@@ -270,4 +319,23 @@ __all__ = [
     "ThesisNotices",
     "ThesisReactor",
     "ThesisReactions",
+    "TradeFeedTrader",
+    "TradeFeedTrade",
+    "TradeFeedThesis",
+    "TradeFeedLinks",
+    "TradeFeedTradeItem",
+    "TradeFeedThesisItem",
+    "TradeFeedItem",
+    "TradeFeedMinNative",
+    "TradeFeedSettings",
+    "TradeFeedEntry",
+    "TradeFeedAddResult",
+    "TradeFeedRemoveResult",
+    "TradeFeedNotification",
+    "TradeFeedTradeData",
+    "TradeFeedThesisData",
+    "TradeFeedEventData",
+    "TradeFeedTradeEvent",
+    "TradeFeedThesisEvent",
+    "TradeFeedEvent",
 ]

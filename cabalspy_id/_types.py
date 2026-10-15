@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
-from ._constants import Chain, Currency, LeaderboardSort, Period, Scope
+from ._constants import Chain, Currency, LeaderboardSort, Period, Scope, TradeFeedEventType, TradeFeedLabel
 
 # ── envelope ─────────────────────────────────────────────────────────────────
 
@@ -564,7 +564,8 @@ class WebhookEvent(TypedDict):
     type: str
     created_at: str
     sandbox: bool
-    #: Always carries "sub" (the user's CabalSpy ID), except for webhook.test.
+    #: Carries "sub" (the user's CabalSpy ID), except for webhook.test and the
+    #: Trade Feed events (``trade_feed.*`` list the users to tell in ``data["recipients"]``).
     data: dict[str, Any]
 
 
@@ -708,3 +709,200 @@ class ThesisNotices(TypedDict):
 class ThesisReactions(TypedDict):
     id: str
     reactions: dict[str, int]
+
+
+# ── Trade Feed ───────────────────────────────────────────────────────────────
+
+
+class TradeFeedTrader(TypedDict):
+    """A trader as everyone may see them."""
+
+    csid_id: str
+    #: X handle; for people without X ``tg.<telegram name>`` or ``id.<hex>``.
+    username: str
+    name: str | None
+    image_url: str | None
+    #: Has the KOL badge.
+    kol: bool
+    profile_url: str | None
+
+
+class TradeFeedTrade(TypedDict):
+    """A trade of a trader in a Trade Feed."""
+
+    blockchain: Chain
+    mint: str
+    symbol: str | None
+    name: str | None
+    logo: str | None
+    side: Literal["buy", "sell"]
+    #: new | add | partial | close | sell
+    label: TradeFeedLabel
+    #: ``partial`` sells: the share of the position sold, 0-100.
+    sold_percent: float | None
+    #: Size in the chain's native coin (``currency``).
+    amount_native: float
+    currency: Currency | None
+    amount_usd: float | None
+    token_amount: float | None
+    price_usd: float | None
+    #: Sells with a known entry: realized PnL of this sell.
+    pnl_usd: float | None
+    pnl_percent: float | None
+    #: The trader's verified wallet (verified wallets are public).
+    wallet: str
+    wallet_url: str | None
+    tx_signature: str
+    tx_url: str | None
+
+
+class TradeFeedThesis(TypedDict):
+    """A thesis of a trader in a Trade Feed."""
+
+    id: str
+    blockchain: Chain
+    mint: str
+    symbol: str | None
+    name: str | None
+    logo: str | None
+    stance: Literal["bull", "bear"] | None
+    body: str
+    likes: int
+    replies: int
+    #: The token's theses on CabalSpy ID.
+    url: str
+
+
+class TradeFeedLinks(TypedDict):
+    #: CabalSpy Terminal (Solana, BNB), else the token's theses.
+    token: str
+    #: CabalSpy Terminal chart; None on chains it does not cover.
+    terminal: str | None
+    #: The trader's CabalSpy ID profile.
+    profile: str | None
+
+
+class _TradeFeedItemCore(TypedDict):
+    #: Stable id of the trade ("t...") or thesis ("h..."): dedupe on it.
+    id: str
+    timestamp: str
+    trader: TradeFeedTrader
+    links: TradeFeedLinks
+
+
+class _TradeFeedCursor(TypedDict, total=False):
+    #: Feed pages only: this item's position (pass it as ``cursor`` to read on from here).
+    cursor: str
+
+
+class TradeFeedTradeItem(_TradeFeedItemCore, _TradeFeedCursor):
+    type: Literal["trade"]
+    trade: TradeFeedTrade
+
+
+class TradeFeedThesisItem(_TradeFeedItemCore, _TradeFeedCursor):
+    type: Literal["thesis"]
+    thesis: TradeFeedThesis
+
+
+#: One entry of a Trade Feed: ``item["type"]`` is "trade" or "thesis".
+TradeFeedItem = TradeFeedTradeItem | TradeFeedThesisItem
+
+
+class TradeFeedMinNative(TypedDict):
+    SOL: float
+    BNB: float
+    ETH: float
+
+
+class TradeFeedSettings(TypedDict):
+    """What a person is told about one trader."""
+
+    notify_buys: bool
+    notify_sells: bool
+    notify_theses: bool
+    #: Minimum trade size per native coin (0 = every trade).
+    min_native: TradeFeedMinNative
+    #: Muted: still in the feed, but no notifications.
+    muted: bool
+
+
+class TradeFeedEntry(TypedDict):
+    """A trader in a person's Trade Feed."""
+
+    trader: TradeFeedTrader
+    #: False while the trader keeps their trading private (nothing of them shows up then).
+    trading_public: bool
+    added_at: str
+    #: In how many Trade Feeds this trader is.
+    in_trade_feeds: int
+    settings: TradeFeedSettings
+
+
+class TradeFeedAddResult(TypedDict):
+    in_trade_feed: Literal[True]
+    #: False: the trader was already there (settings, if given, were updated).
+    created: bool
+    trader: TradeFeedTrader
+    settings: TradeFeedSettings
+
+
+class TradeFeedRemoveResult(TypedDict):
+    in_trade_feed: Literal[False]
+    #: False: the trader was not in the Trade Feed.
+    removed: bool
+
+
+class TradeFeedNotification(TypedDict):
+    """A Trade Feed event of one person (one that passed their filters)."""
+
+    id: int
+    event: TradeFeedEventType
+    #: One plain-text line, e.g. "Trade Feed: @handle bought $SYM — 1.2 SOL ($240) · new position".
+    text: str
+    created_at: str
+    data: TradeFeedItem
+
+
+class TradeFeedTradeData(_TradeFeedItemCore):
+    """``data`` of a ``trade_feed.trade`` webhook or stream event."""
+
+    type: Literal["trade"]
+    trade: TradeFeedTrade
+    #: Your users who should hear about it (their csid_ids).
+    recipients: list[str]
+
+
+class TradeFeedThesisData(_TradeFeedItemCore):
+    """``data`` of a ``trade_feed.thesis`` webhook or stream event."""
+
+    type: Literal["thesis"]
+    thesis: TradeFeedThesis
+    #: Your users who should hear about it (their csid_ids).
+    recipients: list[str]
+
+
+TradeFeedEventData = TradeFeedTradeData | TradeFeedThesisData
+
+
+class TradeFeedTradeEvent(TypedDict):
+    """A ``trade_feed.trade`` webhook."""
+
+    id: str
+    type: Literal["trade_feed.trade"]
+    created_at: str
+    sandbox: bool
+    data: TradeFeedTradeData
+
+
+class TradeFeedThesisEvent(TypedDict):
+    """A ``trade_feed.thesis`` webhook."""
+
+    id: str
+    type: Literal["trade_feed.thesis"]
+    created_at: str
+    sandbox: bool
+    data: TradeFeedThesisData
+
+
+TradeFeedEvent = TradeFeedTradeEvent | TradeFeedThesisEvent

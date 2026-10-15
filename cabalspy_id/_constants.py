@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.5.2"
+SDK_VERSION = "0.6.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -17,7 +17,8 @@ LeaderboardSort = Literal["volume", "pnl", "pnl_usd", "win_rate", "trades"]
 Currency = Literal["SOL", "BNB", "ETH"]
 Scope = Literal["instance", "global"]
 #: ``thesis``: post theses and replies, react and report in the user's name.
-OidcScope = Literal["openid", "profile", "wallets", "onchain", "thesis", "offline_access"]
+#: ``trade_feed``: manage the user's Trade Feed; they receive ``trade_feed.*`` events.
+OidcScope = Literal["openid", "profile", "wallets", "onchain", "thesis", "trade_feed", "offline_access"]
 ThesisStance = Literal["bull", "bear"]
 ThesisSort = Literal["new", "top"]
 ThesisEmoji = Literal["like", "🔥", "🚀", "💎", "👀", "😂", "🤝", "💀", "🐂", "🐻"]
@@ -50,6 +51,8 @@ WEBHOOK_EVENTS: tuple[str, ...] = (
     "thesis.created",
     "thesis.reply",
     "thesis.reaction",
+    "trade_feed.trade",
+    "trade_feed.thesis",
     "webhook.test",
 )
 
@@ -68,3 +71,16 @@ DEFAULT_THESIS_URL = "https://id.cabalspy.xyz/thesis/v1"
 DEFAULT_THESIS_WS_URL = "wss://id.cabalspy.xyz/thesis/v1/ws"
 #: Header that carries the instance's public client_id on every public thesis API call.
 CLIENT_ID_HEADER = "X-CSID-Client-Id"
+
+# ── Trade Feed ───────────────────────────────────────────────────────────────
+
+TradeFeedFilter = Literal["all", "buys", "sells", "theses"]
+#: new (first buy / buy after closing), add, partial (sold_percent), close, sell (entry unknown)
+TradeFeedLabel = Literal["new", "add", "partial", "close", "sell"]
+TradeFeedEventType = Literal["trade_feed.trade", "trade_feed.thesis"]
+TRADE_FEED_FILTERS: tuple[TradeFeedFilter, ...] = ("all", "buys", "sells", "theses")
+#: Webhook / stream event types of the Trade Feed.
+TRADE_FEED_EVENTS: tuple[TradeFeedEventType, ...] = ("trade_feed.trade", "trade_feed.thesis")
+#: At most this many traders in one person's Trade Feed.
+TRADE_FEED_MAX_TRADERS = 300
+DEFAULT_TRADE_FEED_STREAM_URL = "wss://api-id.cabalspy.xyz/v1/trade-feed/stream"

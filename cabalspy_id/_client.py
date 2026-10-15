@@ -25,12 +25,14 @@ from ._constants import (
     DEFAULT_BASE_URL,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
+    DEFAULT_TRADE_FEED_STREAM_URL,
     LEADERBOARD_SORTS,
     PERIODS,
     SCOPES,
     THESIS_EMOJIS,
     THESIS_REPORT_REASONS,
     THESIS_SCOPES,
+    TRADE_FEED_FILTERS,
     USER_AGENT,
     Chain,
     LeaderboardSort,
@@ -42,6 +44,7 @@ from ._constants import (
     ThesisScope,
     ThesisSort,
     ThesisStance,
+    TradeFeedFilter,
 )
 from ._errors import (
     APIConnectionError,
@@ -58,6 +61,7 @@ from ._errors import (
 if TYPE_CHECKING:
     from ._stream import CabalSpyIDStream
     from ._theses_stream import ThesesStream
+    from ._trade_feed_stream import TradeFeedStream
 
 __all__ = ["CabalSpyID", "AsyncCabalSpyID", "Envelope"]
 
@@ -161,6 +165,19 @@ def _theses_query(
         "cursor": cursor,
         "csid_id": csid_id,
     }
+
+
+def _trade_feed_query(
+    csid_id: str, filter: TradeFeedFilter | None, limit: int | None, cursor: str | None
+) -> dict[str, Any]:
+    _required(csid_id, "csid_id")
+    _one_of(filter, TRADE_FEED_FILTERS, "filter")
+    return {"csid_id": csid_id, "filter": filter, "limit": limit, "cursor": cursor}
+
+
+def _trade_feed_page(csid_id: str, limit: int | None, cursor: str | None) -> dict[str, Any]:
+    _required(csid_id, "csid_id")
+    return {"csid_id": csid_id, "limit": limit, "cursor": cursor}
 
 
 def _post_retryable(exc: CabalSpyIDError) -> bool:
@@ -537,6 +554,91 @@ class _Endpoints:
         _required(csid_id, "csid_id")
         return self._post("/theses/delete", {"thesis_id": thesis_id, "csid_id": csid_id})
 
+    # ── Trade Feed ───────────────────────────────────────────────────────
+    # In the name of one of your users (csid_id, the "sub" of their ID token):
+    # they must have signed in to an app of your instance with the scope
+    # "trade_feed", else PermissionError "consent_required".
+
+    def trade_feed(
+        self,
+        csid_id: str,
+        *,
+        filter: TradeFeedFilter | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/trade-feed — the user's Trade Feed: trades (labelled new / add /
+        partial / close / sell, with the realized PnL of sells) and theses of the
+        traders in it, newest first.
+
+        ``filter``: all (default), buys, sells, theses; ``limit`` 1-100 (default 30).
+        Returns a list of :data:`~cabalspy_id.TradeFeedItem`.
+        """
+        return self._get("/trade-feed", _trade_feed_query(csid_id, filter, limit, cursor))
+
+    def trade_feed_traders(self, csid_id: str, *, limit: int | None = None, cursor: str | None = None) -> Any:
+        """GET /v1/trade-feed/traders — the traders in the user's Trade Feed with their
+        settings, newest first. ``limit`` 1-300 (default 100); the envelope's
+        pagination (``get_raw``) carries ``total`` and ``max``.
+
+        Returns a list of :class:`~cabalspy_id.TradeFeedEntry`.
+        """
+        return self._get("/trade-feed/traders", _trade_feed_page(csid_id, limit, cursor))
+
+    def add_to_trade_feed(
+        self,
+        csid_id: str,
+        trader: str,
+        *,
+        notify_buys: bool | None = None,
+        notify_sells: bool | None = None,
+        notify_theses: bool | None = None,
+        min_sol: float | None = None,
+        min_bnb: float | None = None,
+        min_eth: float | None = None,
+        muted: bool | None = None,
+    ) -> Any:
+        """POST /v1/trade-feed/traders — adds a trader (handle with or without @, or
+        csid_id) to the user's Trade Feed; for a trader already there, updates the
+        given settings. ``created`` tells which (HTTP 201 / 200). Omitted settings
+        keep their value; a new trader starts with the person's defaults.
+
+        Errors: trader_not_found (NotFoundError), cannot_add_self (BadRequestError),
+        trading_private and consent_required (PermissionError), trade_feed_full
+        (409, CabalSpyIDError), rate_limited (RateLimitError).
+        Returns :class:`~cabalspy_id.TradeFeedAddResult`.
+        """
+        _required(csid_id, "csid_id")
+        _required(trader, "trader")
+        settings = {
+            "notify_buys": notify_buys,
+            "notify_sells": notify_sells,
+            "notify_theses": notify_theses,
+            "min_sol": min_sol,
+            "min_bnb": min_bnb,
+            "min_eth": min_eth,
+            "muted": muted,
+        }
+        body = {k: v for k, v in settings.items() if v is not None}
+        return self._post("/trade-feed/traders", {**body, "csid_id": csid_id, "trader": trader})
+
+    def remove_from_trade_feed(self, csid_id: str, trader: str) -> Any:
+        """POST /v1/trade-feed/traders/delete — removes a trader; ``removed`` is False
+        when they were not there. Returns :class:`~cabalspy_id.TradeFeedRemoveResult`.
+        """
+        _required(csid_id, "csid_id")
+        _required(trader, "trader")
+        return self._post("/trade-feed/traders/delete", {"csid_id": csid_id, "trader": trader})
+
+    def trade_feed_notifications(self, csid_id: str, *, limit: int | None = None, cursor: str | None = None) -> Any:
+        """GET /v1/trade-feed/notifications — the user's recent Trade Feed events (the
+        ones that passed their filters), newest first; for platforms without webhooks.
+        ``limit`` 1-100 (default 50).
+
+        Returns a list of :class:`~cabalspy_id.TradeFeedNotification`.
+        """
+        return self._get("/trade-feed/notifications", _trade_feed_page(csid_id, limit, cursor))
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIENTS
@@ -552,6 +654,7 @@ class _BaseClient(_Endpoints):
         base_url: str | None = None,
         stream_url: str | None = None,
         theses_stream_url: str | None = None,
+        trade_feed_stream_url: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 2,
         headers: Mapping[str, str] | None = None,
@@ -564,6 +667,7 @@ class _BaseClient(_Endpoints):
         self.base_url = (base_url or _env("CABALSPY_ID_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.stream_url = (stream_url or _env("CABALSPY_ID_STREAM_URL") or DEFAULT_STREAM_URL).rstrip("/")
         self.theses_stream_url = (theses_stream_url or DEFAULT_THESES_STREAM_URL).rstrip("/")
+        self.trade_feed_stream_url = (trade_feed_stream_url or DEFAULT_TRADE_FEED_STREAM_URL).rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self._extra_headers = dict(headers or {})
@@ -676,6 +780,18 @@ class _BaseClient(_Endpoints):
         from ._theses_stream import ThesesStream
 
         return ThesesStream(self.theses_stream_url, self._api_key, scope=scope, instance=self.instance, **kwargs)
+
+    def trade_feed_stream(self, **kwargs: Any) -> TradeFeedStream:
+        """Live Trade Feed events of your users (every plan): ``trade_feed.trade`` and
+        ``trade_feed.thesis`` with ``data["recipients"]``, like the webhooks. Async only.
+
+        Needs the ``stream`` extra: ``pip install "cabalspy-id[stream]"``.
+        """
+        if not self._api_key:
+            raise AuthenticationError("The Trade Feed stream needs an API key.", status=401, code="missing_api_key")
+        from ._trade_feed_stream import TradeFeedStream
+
+        return TradeFeedStream(self.trade_feed_stream_url, self._api_key, instance=self.instance, **kwargs)
 
 
 class CabalSpyID(_BaseClient):
@@ -812,6 +928,23 @@ class CabalSpyID(_BaseClient):
         for page in self.pages("/theses/replies", {"id": id, "limit": limit, "csid_id": csid_id}):
             yield from page.data
 
+    def iter_trade_feed(
+        self, csid_id: str, *, filter: TradeFeedFilter | None = None, limit: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """The whole Trade Feed of a user, newest first, following ``next_cursor``."""
+        for page in self.pages("/trade-feed", _trade_feed_query(csid_id, filter, limit, None)):
+            yield from page.data
+
+    def iter_trade_feed_traders(self, csid_id: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Every trader in the user's Trade Feed."""
+        for page in self.pages("/trade-feed/traders", _trade_feed_page(csid_id, limit, None)):
+            yield from page.data
+
+    def iter_trade_feed_notifications(self, csid_id: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """The user's Trade Feed notifications, newest first."""
+        for page in self.pages("/trade-feed/notifications", _trade_feed_page(csid_id, limit, None)):
+            yield from page.data
+
 
 class AsyncCabalSpyID(_BaseClient):
     """Asynchronous Data API client.
@@ -946,6 +1079,28 @@ class AsyncCabalSpyID(_BaseClient):
         """Every reply of a thesis, following ``next_cursor``."""
         _required(id, "id")
         async for page in self.pages("/theses/replies", {"id": id, "limit": limit, "csid_id": csid_id}):
+            for item in page.data:
+                yield item
+
+    async def iter_trade_feed(
+        self, csid_id: str, *, filter: TradeFeedFilter | None = None, limit: int | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """The whole Trade Feed of a user, newest first, following ``next_cursor``."""
+        async for page in self.pages("/trade-feed", _trade_feed_query(csid_id, filter, limit, None)):
+            for item in page.data:
+                yield item
+
+    async def iter_trade_feed_traders(self, csid_id: str, *, limit: int | None = None) -> AsyncIterator[dict[str, Any]]:
+        """Every trader in the user's Trade Feed."""
+        async for page in self.pages("/trade-feed/traders", _trade_feed_page(csid_id, limit, None)):
+            for item in page.data:
+                yield item
+
+    async def iter_trade_feed_notifications(
+        self, csid_id: str, *, limit: int | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """The user's Trade Feed notifications, newest first."""
+        async for page in self.pages("/trade-feed/notifications", _trade_feed_page(csid_id, limit, None)):
             for item in page.data:
                 yield item
 

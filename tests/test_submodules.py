@@ -30,3 +30,16 @@ def test_star_imports() -> None:
     ns_thesis: dict[str, object] = {}
     exec("from cabalspy_id.thesis import *", ns_thesis)
     assert ns_thesis["ThesisClient"] is cabalspy_id.ThesisClient
+
+
+def test_trade_feed_subset_is_the_same_objects() -> None:
+    from cabalspy_id import trade_feed
+
+    for name in trade_feed.__all__:
+        if name == "__version__":
+            continue
+        assert getattr(trade_feed, name) is getattr(cabalspy_id, name), name
+    assert "ThesisClient" not in trade_feed.__all__
+    ns: dict[str, object] = {}
+    exec("from cabalspy_id.trade_feed import *", ns)
+    assert ns["TradeFeedStream"] is cabalspy_id.TradeFeedStream
