@@ -580,6 +580,8 @@ class WebhookEvent(TypedDict):
     sandbox: bool
     #: Carries "sub" (the user's CabalSpy ID), except for webhook.test and the
     #: instance-level competition.* events (those carry "competition_id").
+    #: Events about one of your platform users (white-label) also carry
+    #: "external_id" (your own user id) and "csid_id".
     data: dict[str, Any]
 
 
