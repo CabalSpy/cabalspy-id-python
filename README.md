@@ -21,7 +21,7 @@ pip install "cabalspy-id[stream]"
 | | |
 |---|---|
 | `CabalSpyIDAuth` / `AsyncCabalSpyIDAuth` | OpenID Connect for your server: PKCE, code exchange, refresh, revoke, userinfo, ID token verification (ES256 / JWKS) |
-| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream |
+| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream, white-label platform users and trading competitions |
 | `ThesisClient` / `AsyncThesisClient` | public token thesis API with your public `client_id` and a user's access token, plus `live()` updates |
 | `verify_webhook` | Standard Webhooks signature verification |
 
@@ -37,6 +37,7 @@ Everything for developers — instance (client_id), client secrets, redirect URI
 - **Token theses** — holders-only opinions on a token with the author's real position, as a SocialFi widget or your own UI
 - **Trader profiles** — X profile, verified wallets, holdings, PnL calendar
 - **KOL badges** — reviewed badges for influential traders, shown wherever they sign in
+- **White-label** — keep your own login, import your users and their wallets, run trading competitions
 
 ## Packages
 
@@ -229,19 +230,104 @@ except RateLimitError as err:
 
 | Class | Status | Codes |
 |---|---|---|
-| `BadRequestError` | 400 | `missing_parameter`, `invalid_parameter`, `instance_required` |
+| `BadRequestError` | 400 | `missing_parameter`, `invalid_parameter`, `instance_required`, `wallet_required`, `invalid_address`, `invalid_return_url` |
 | `AuthenticationError` | 401 | `missing_api_key` |
-| `PermissionError` | 403 | `invalid_api_key`, `product_not_enabled`, `no_instance`, `scope_not_allowed` |
+| `PermissionError` | 403 | `invalid_api_key`, `product_not_enabled`, `no_instance`, `scope_not_allowed`, `claim_disabled` |
 | `PlanUserLimitError` | 403 | `plan_user_limit` |
-| `NotFoundError` | 404 | `profile_not_found`, `wallet_not_found`, `instance_not_found` |
-| `RateLimitError` | 429 | `rate_limit_exceeded` |
+| `NotFoundError` | 404 | `profile_not_found`, `wallet_not_found`, `instance_not_found`, `platform_user_not_found`, `verification_not_found`, `competition_not_found` |
+| `ConflictError` | 409 | `account_claimed`, `last_wallet`, `too_many_wallets`, `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`, `competition_closed`, `competition_full`, `late_join_closed` |
+| `RateLimitError` | 429 | `rate_limit_exceeded`, `rate_limited`, `too_many_open_verifications` |
 | `ServerError` | 5xx | `internal_error`, `service_unavailable` |
 | `APIConnectionError` | – | network failure, timeout |
 | `OAuthError` | 4xx | OAuth errors from the login endpoints (`invalid_grant`, `invalid_client`, …) |
 | `TokenVerificationError` | – | ID / access token failed verification |
 | `WebhookVerificationError` | – | webhook signature or timestamp invalid |
+| `PlatformImportError` | – | `bulk_import_platform_users` stopped; carries `result` and `remaining` |
 
-`429`, `5xx` and network errors are retried with exponential backoff (default 2 retries); `Retry-After` wins. The rate limit of the last call is in `csid.last_rate_limit` (`X-RateLimit-Limit/Remaining/Reset`).
+`429`, `5xx` and network errors are retried with exponential backoff (default 2 retries); `Retry-After` wins. Writes (POST) are retried only after the API-wide rate limit (`rate_limit_exceeded`), since they did not run. The rate limit of the last call is in `csid.last_rate_limit` (`X-RateLimit-Limit/Remaining/Reset`).
+
+## White-label (platform users)
+
+Keep your own login. Your platform imports its users — by **your own user id** (`external_id`) — together with the wallets they already have (Privy, Dynamic, any provider), and then uses their trades, PnL, leaderboards and trading competitions through the API. No CabalSpy ID login, no wallet connect: imported wallets count right away (unless you set `wallet_trust="verified_only"`), and the on-chain payment verification stays available as a badge.
+
+```python
+from cabalspy_id import CabalSpyID, PlanUserLimitError
+
+csid = CabalSpyID()
+
+# One user: create or update (a new user needs 1-10 wallets)
+user = csid.upsert_platform_user(
+    "user_42",
+    wallets=["So1...", {"address": "0xabc...", "chains": ["base"], "source": "privy"}],
+    display_name="Alice",
+)
+
+# Everyone else: any number of users, sent in chunks of 1,000
+result = csid.bulk_import_platform_users(
+    {"external_id": u.id, "wallets": u.wallet_addresses, "display_name": u.name} for u in all_users
+)
+print(result["summary"])  # {"created": ..., "updated": ..., "unchanged": ..., "rejected": ...}
+
+# A profile page in one call, and your own leaderboard
+profile = csid.platform_user_profile("user_42", period="7d")
+board = csid.platform_leaderboard(blockchain="solana", period="7d", sort="pnl_usd")
+for entry in board["leaderboard"]:
+    print(entry["rank"], entry["external_id"], entry["period_stats"]["realized_pnl_usd"])
+
+# A trading competition between your users
+comp = csid.create_competition(name="Weekly PnL", chain="solana", metric="pnl_usd",
+                               duration_hours=168, enrollment="all_users")
+standings = csid.competition_standings(comp["id"])
+```
+
+Every platform-users method that takes a user accepts the `external_id` positionally or `csid_id=` (exactly one). The rest of the API also accepts `external_id` in place of `csid_id` (pass it with `get_raw` / `post_raw`), and every platform user carries its `csid_id` for the other SDK methods. A full tour is in [`examples/white_label.py`](examples/white_label.py).
+
+**Bulk import.** `import_platform_users(users)` is one call (at most 1,000 users). `bulk_import_platform_users(users)` takes any number: it sends chunks of at most 1,000 users and under the server's 1 MB body limit, retries a chunk refused with 429 (`Retry-After` wins), and sends users rejected with `rate_limited` (too many new users per minute) again on their own once the minute is over. A chunk that succeeded is never sent again. Results come back aggregated, one per user in input order. If anything else stops it, `PlatformImportError` carries `result` (what was imported) and `remaining` (pass it again to resume). Each user is handled on its own on the server: a bad item or the plan's user limit (`plan_user_limit`) never undoes the others.
+
+| Method | Endpoint |
+|---|---|
+| `upsert_platform_user(external_id, wallets=, display_name=, avatar_url=)` | `POST /v1/platform-users` |
+| `import_platform_users(users)` / `bulk_import_platform_users(users)` | `POST /v1/platform-users/import` |
+| `platform_user(external_id \| csid_id=)` | `GET /v1/platform-users` |
+| `update_platform_user(external_id, display_name=, avatar_url=)` | `POST /v1/platform-users/update` |
+| `platform_users(limit=, cursor=)` / `iter_platform_users()` | `GET /v1/platform-users/list` |
+| `delete_platform_user(external_id)` | `POST /v1/platform-users/delete` |
+| `add_platform_user_wallets(external_id, wallets=)` | `POST /v1/platform-users/wallets/add` |
+| `delete_platform_user_wallet(external_id, address=)` | `POST /v1/platform-users/wallets/delete` |
+| `start_wallet_verification(external_id, chain=, address=)` | `POST /v1/platform-users/wallets/verify` |
+| `wallet_verification(id)` / `wallet_verification_qr(id)` (SVG) / `cancel_wallet_verification(id)` | `/v1/platform-users/wallets/verification[/qr\|/cancel]` |
+| `platform_user_profile(external_id, period=)` | `GET /v1/platform-users/profile` |
+| `platform_leaderboard(blockchain=, period=, sort=, limit=, cursor=, trust=)` / `iter_platform_leaderboard()` | `GET /v1/platform-users/leaderboard` |
+| `platform_settings()` / `update_platform_settings(...)` | `GET` / `POST /v1/platform-users/settings` |
+| `platform_inbound()` / `enable_platform_inbound()` / `disable_platform_inbound()` | `/v1/platform-users/inbound[/enable\|/disable]` |
+| `platform_user_session(external_id)` | `POST /v1/platform-users/session` (verify widget, 15 min) |
+| `platform_user_claim_link(external_id, return_url=)` | `POST /v1/platform-users/claim-link` |
+| `connect_platform_user_x(external_id, return_url=)` / `disconnect_platform_user_x(external_id)` | `POST /v1/platform-users/x/connect`, `/x/disconnect` |
+| `link_platform_user_telegram` / `platform_user_telegram` / `unlink_platform_user_telegram` | `/v1/platform-users/telegram[/link\|/unlink]` |
+| `platform_user_kol` / `request_platform_user_volume_check` / `apply_platform_user_kol` | `/v1/platform-users/kol[/volume-check\|/apply]` |
+
+**Settings** (`update_platform_settings`): `white_label`, `data_scope` (`csid`: part of the CabalSpy ID network, default; `platform`: only you see your users), `wallet_trust` and `leaderboard_trust` (`all` or `verified_only`), `claim_links`, `telegram_alerts`. Wallets carry a `status`: `verified`, `active` (unverified, counts), `needs_verification`, `verified_elsewhere` or `pending`.
+
+**Inbound URL.** `enable_platform_inbound()` returns a secret URL (shown once) that your platform or its auth provider calls on sign-up; users are then created like `upsert_platform_user`. Formats: `csid`, `privy`, `dynamic`, `generic`.
+
+### Trading competitions
+
+Individual competitions between your platform users, at most 5 scheduled + running at a time per account. A competition starts at `starts_at` (or at once) once `min_participants` joined, then runs `duration_hours`. Metrics: `pnl_usd`, `pnl`, `volume_usd`, `volume`, `trades`, `win_rate`. Traders below `min_trades` / `min_volume_usd` are listed but not ranked. Rules can change at any time, also while running; every change is recorded (`changes`, `rules_version`).
+
+| Method | Endpoint |
+|---|---|
+| `create_competition(name=, chain=, metric=, duration_hours=, ...)` | `POST /v1/competitions` |
+| `competitions(status=, limit=, offset=)` / `iter_competitions()` | `GET /v1/competitions` |
+| `competition(id)` | `GET /v1/competitions/detail` |
+| `update_competition(id, note=, **fields)` | `POST /v1/competitions/update` |
+| `cancel_competition(id)` | `POST /v1/competitions/cancel` |
+| `join_competition(id, external_id)` / `leave_competition(id, external_id)` | `POST /v1/competitions/join`, `/leave` |
+| `competition_participants(id, limit=, offset=)` / `iter_competition_participants(id)` | `GET /v1/competitions/participants` |
+| `competition_standings(id, limit=, offset=)` / `iter_competition_standings(id)` | `GET /v1/competitions/standings` |
+
+The competition routes page by `offset`; the `iter_*` helpers walk them until `pagination.total`.
+
+Webhooks: `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired`, and per instance `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (`PLATFORM_WEBHOOK_EVENTS`, `COMPETITION_WEBHOOK_EVENTS`).
 
 ## Token theses
 
@@ -391,7 +477,7 @@ The server sends a heartbeat every 30 seconds. The client reconnects with expone
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit.
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`).
 
 ```python
 from cabalspy_id import verify_webhook
