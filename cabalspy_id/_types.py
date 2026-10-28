@@ -1097,11 +1097,16 @@ class InboundEventResult(TypedDict, total=False):
     """What the inbound URL answers to a sign-up event."""
 
     accepted: bool
-    #: created | updated | deleted | unknown_user | waiting_for_wallet
+    #: created | updated | deleted | wallets_removed | ignored | unknown_user | waiting_for_wallet
     result: str
     external_id: str
     csid_id: str
     wallets_added: list[WalletAdded]
+    #: wallets_removed: the addresses removed, and {address, code} for each one kept
+    wallets_removed: list[str]
+    wallets_not_removed: list[dict[str, str]]
+    #: ignored: why (wallet removals from auth providers are not applied)
+    note: str
     error: PlatformItemError
 
 
