@@ -4,6 +4,63 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-10-31
+
+Callouts: your users call tokens, and every call is stamped with the token's price and market
+cap and tracked (every minute for the first 24 hours, then scored on candles; every 5 minutes
+after that while the token is active, until 24 hours in a row below a $10k market cap). Callouts
+are an extra that CabalSpy switches on per instance on request. Sync and async.
+
+### Added
+
+- Callouts (`/v1/callouts*`) on `CabalSpyID` and `AsyncCabalSpyID`: `create_callout`
+  (`external_id` positionally or `csid_id=`; `chain`, `mint`, `note`), `remove_callout`,
+  `callouts` / `iter_callouts` (filters `chain`, `mint`, `external_id` / `csid_id`, `since`,
+  `until`; datetimes are sent as ISO 8601 UTC), `callout`, `callout_stats` (`hit_x`),
+  `callout_leaderboard` / `iter_callout_leaderboard` (`period`, `chain`, `sort`, `min_callouts`,
+  `hit_x`), `callout_settings`, `update_callout_settings` (`who`, `require_holding`,
+  `cooldown_minutes`).
+- `CalloutsStream` for `wss://api-id.cabalspy.xyz/v1/callouts/stream` via
+  `client.callouts_stream(chain=, mint=)`: events `callout.created`, `callout.update`,
+  `callout.milestone`, `callout.scored`, `callout.final`, `callout.removed` (handlers or
+  `async for`), heartbeats, reconnects with backoff; `feature_not_enabled` and `invalid_api_key`
+  are fatal, `too_many_connections` reconnects. New client option `callouts_stream_url`.
+- Callout competitions: `create_competition(kind="callouts", ...)` with the metrics
+  `avg_peak_x`, `best_peak_x`, `sum_peak_x`, `hit_rate`, `callouts`, `min_callouts`, `hit_x` and
+  `chain="all"`; `update_competition` takes `min_callouts`, `hit_x` and `chain="all"`. The kind
+  decides which chains, metrics and minimums are accepted locally.
+- Types: `Callout` (`at_call`, `now`, `peak`, `score_x`, `tracking` with `below_10k_since`,
+  `first_day`, ...), `CalloutStats`, `CalloutPeriodStats`, `CalloutLeaderboardEntry`,
+  `CalloutLeaderboardResponse`, `CalloutSettings`, `CalloutBestCall`, `CalloutUser`, the stream
+  events `CalloutUpdate`, `CalloutMilestone`, `CalloutRemovedEvent`, `CalloutsStreamReady`, and
+  `CalloutWebhookData`. `MeResponse.features` (the extras switched on, e.g. `["callouts"]`).
+  `Competition` has `kind`, `min_callouts` and `hit_x`; `CompetitionStanding` the callout stats
+  and `best_call`.
+- Constants: `CALLOUT_WEBHOOK_EVENTS` (`callout.created`, `callout.milestone`, `callout.scored`,
+  `callout.final`, also in `WEBHOOK_EVENTS`), `CALLOUT_COMPETITION_METRICS`, `COMPETITION_KINDS`,
+  `CALLOUT_SORTS`, `CALLOUT_WHO`, `CALLOUT_MAX_NOTE`, `CALLOUT_DEFAULT_HIT_X`,
+  `CALLOUT_MILESTONES`, `CALLOUT_ACTIVE_MCAP_USD`, `MAX_CALLOUT_STREAMS_PER_KEY`,
+  `DEFAULT_CALLOUTS_STREAM_URL`, `FEATURE_CALLOUTS`, `CALLOUT_EVENTS`, `CALLOUTS_STREAM_EVENTS`;
+  Literal types `CompetitionKind`, `CompetitionChain`, `TradingCompetitionMetric`,
+  `CalloutCompetitionMetric`, `CalloutSort`, `CalloutWho`, `CalloutStatus`, `CalloutPhase`,
+  `CalloutFirstDayKind`.
+- New error codes on the existing classes: `feature_not_enabled`, `kol_only`, `not_a_holder`,
+  `invalid_account`, `posting_paused`, `consent_required`, `sandbox_user` (`PermissionError`),
+  `callout_not_found` (`NotFoundError`), `already_called` (`ConflictError`), `callout_cooldown`
+  (`RateLimitError` with `retry_after`), `no_price` (`BadRequestError`, HTTP 422).
+- README section "Callouts (on request)" and `examples/callouts.py`.
+
+### Changed
+
+- `callout_cooldown` (429) is never retried automatically, on any route: its `Retry-After` can be
+  hours. `RateLimitError.retry_after` falls back to the error body's `retry_after` when the header
+  is missing.
+- HTTP 422 responses raise `BadRequestError` (with `status` 422) instead of the base
+  `CabalSpyIDError`.
+- `CompetitionMetric` now covers the trading and the callout metrics; the trading ones alone are
+  `TradingCompetitionMetric` (`COMPETITION_METRICS` is unchanged). `Competition.min_trades` and
+  `min_volume_usd` are only present on trading competitions.
+
 ## [0.6.0] - 2026-10-28
 
 White-label: a platform keeps its own login, imports its users (by its own user id,
@@ -174,6 +231,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.7.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.0...v0.5.1

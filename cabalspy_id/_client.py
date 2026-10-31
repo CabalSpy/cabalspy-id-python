@@ -17,18 +17,24 @@ import os
 import random
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import httpx
 
 from ._constants import (
+    CALLOUT_COMPETITION_METRICS,
+    CALLOUT_MAX_NOTE,
+    CALLOUT_SORTS,
+    CALLOUT_WHO,
     CHAINS,
     COMPETITION_ENROLLMENTS,
+    COMPETITION_KINDS,
     COMPETITION_METRICS,
     COMPETITION_STATUSES,
     DATA_SCOPES,
     DEFAULT_BASE_URL,
+    DEFAULT_CALLOUTS_STREAM_URL,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
     LEADERBOARD_SORTS,
@@ -41,8 +47,12 @@ from ._constants import (
     THESIS_SCOPES,
     USER_AGENT,
     WALLET_TRUST,
+    CalloutSort,
+    CalloutWho,
     Chain,
+    CompetitionChain,
     CompetitionEnrollment,
+    CompetitionKind,
     CompetitionMetric,
     CompetitionStatus,
     DataScope,
@@ -73,6 +83,7 @@ from ._errors import (
 from ._types import PlatformBulkImportResult, PlatformUserInput, PlatformWalletInput
 
 if TYPE_CHECKING:
+    from ._callouts_stream import CalloutsStream
     from ._stream import CabalSpyIDStream
     from ._theses_stream import ThesesStream
 
@@ -254,15 +265,102 @@ def _platform_leaderboard_query(
     return {"blockchain": blockchain, "period": period, "sort": sort, "trust": trust, "limit": limit, "cursor": cursor}
 
 
-def _competition_fields(**fields: Any) -> dict[str, Any]:
+_TRADING_ONLY = ("min_trades", "min_volume_usd")
+_CALLOUTS_ONLY = ("min_callouts", "hit_x")
+
+
+def _competition_fields(*, creating: bool, **fields: Any) -> dict[str, Any]:
+    """Validated competition fields. On create the kind is known (default trading) and
+    decides the chains, metrics and minimums; on update the server knows the kind."""
     out = _given(**fields)
-    _one_of(out.get("chain"), CHAINS, "chain")
-    _one_of(out.get("metric"), COMPETITION_METRICS, "metric")
+    _one_of(out.get("kind"), COMPETITION_KINDS, "kind")
+    kind = (out.get("kind") or "trading") if creating else None
+    chains: tuple[str, ...] = (*CHAINS, "all") if kind in ("callouts", None) else CHAINS
+    if kind == "callouts":
+        metrics: tuple[str, ...] = CALLOUT_COMPETITION_METRICS
+    elif kind == "trading":
+        metrics = COMPETITION_METRICS
+    else:
+        metrics = (*COMPETITION_METRICS, *CALLOUT_COMPETITION_METRICS)
+    _one_of(out.get("chain"), chains, "chain")
+    _one_of(out.get("metric"), metrics, "metric")
     _one_of(out.get("wallet_trust"), WALLET_TRUST, "wallet_trust")
     _one_of(out.get("enrollment"), COMPETITION_ENROLLMENTS, "enrollment")
+    wrong = _CALLOUTS_ONLY if kind == "trading" else _TRADING_ONLY if kind == "callouts" else ()
+    for name in wrong:
+        if name in out:
+            raise BadRequestError(
+                f"{name} does not apply to {kind} competitions.", code="invalid_parameter", parameter=name
+            )
+    if "hit_x" in out:
+        _hit_x(out["hit_x"])
     if isinstance(out.get("starts_at"), datetime):
         out["starts_at"] = out["starts_at"].isoformat()
     return out
+
+
+def _hit_x(value: Any) -> None:
+    """hit_x: a number above 1 and at most 1000 (None = the server's default, 2)."""
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 1 < value <= 1000:
+        raise BadRequestError(
+            "hit_x must be a number above 1 and at most 1000.", code="invalid_parameter", parameter="hit_x"
+        )
+
+
+def _time_param(value: str | datetime | None) -> str | None:
+    """A datetime as ISO 8601 UTC (naive = UTC, like the server); strings pass through."""
+    if not isinstance(value, datetime):
+        return value
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _callouts_query(
+    chain: Any, mint: Any, external_id: Any, csid_id: Any, since: Any, until: Any, limit: Any, cursor: Any
+) -> dict[str, Any]:
+    _one_of(chain, CHAINS, "chain")
+    if mint and not chain:
+        raise BadRequestError("Pass chain together with mint.", code="missing_parameter", parameter="chain")
+    if external_id and csid_id:
+        raise BadRequestError(
+            "Pass at most one of: external_id, csid_id.", code="invalid_parameter", parameter="external_id|csid_id"
+        )
+    return {
+        "chain": chain,
+        "mint": mint,
+        "external_id": external_id,
+        "csid_id": csid_id,
+        "since": _time_param(since),
+        "until": _time_param(until),
+        "limit": limit,
+        "cursor": cursor,
+    }
+
+
+def _callout_leaderboard_query(
+    period: Any, chain: Any, sort: Any, min_callouts: Any, hit_x: Any, limit: Any, cursor: Any
+) -> dict[str, Any]:
+    _one_of(period, PERIODS, "period")
+    _one_of(chain, CHAINS, "chain")
+    _one_of(sort, CALLOUT_SORTS, "sort")
+    if min_callouts is not None and (
+        isinstance(min_callouts, bool) or not isinstance(min_callouts, int) or not 1 <= min_callouts <= 1000
+    ):
+        raise BadRequestError(
+            "min_callouts must be a whole number from 1 to 1000.", code="invalid_parameter", parameter="min_callouts"
+        )
+    _hit_x(hit_x)
+    return {
+        "period": period,
+        "chain": chain,
+        "sort": sort,
+        "min_callouts": min_callouts,
+        "hit_x": hit_x,
+        "limit": limit,
+        "cursor": cursor,
+    }
 
 
 def _import_items(users: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1026,25 +1124,34 @@ class _Endpoints:
         self,
         *,
         name: str,
-        chain: Chain,
+        chain: CompetitionChain,
         metric: CompetitionMetric,
         duration_hours: float,
+        kind: CompetitionKind | _NotGiven = NOT_GIVEN,
         starts_at: str | datetime | _NotGiven | None = NOT_GIVEN,
         min_participants: int | _NotGiven = NOT_GIVEN,
         max_participants: int | _NotGiven | None = NOT_GIVEN,
         min_trades: int | _NotGiven = NOT_GIVEN,
         min_volume_usd: float | _NotGiven = NOT_GIVEN,
+        min_callouts: int | _NotGiven = NOT_GIVEN,
+        hit_x: float | _NotGiven = NOT_GIVEN,
         wallet_trust: WalletTrust | _NotGiven = NOT_GIVEN,
         enrollment: CompetitionEnrollment | _NotGiven = NOT_GIVEN,
         late_join: bool | _NotGiven = NOT_GIVEN,
         prizes: Any = NOT_GIVEN,
         description: str | _NotGiven | None = NOT_GIVEN,
     ) -> Any:
-        """POST /v1/competitions — a trading competition between your platform users.
+        """POST /v1/competitions — a competition between your platform users.
 
         It starts at ``starts_at`` (or at once) once ``min_participants`` joined, then runs
         ``duration_hours`` (1-8760). ``enrollment="all_users"`` enters every platform user.
-        Traders below ``min_trades`` / ``min_volume_usd`` are listed but not ranked.
+
+        ``kind="trading"`` (default): ranked on trades; traders below ``min_trades`` /
+        ``min_volume_usd`` are listed but not ranked. ``kind="callouts"`` (needs the
+        callouts extra, else ``feature_not_enabled``): ranked on the callouts made during
+        the competition by ``avg_peak_x``, ``best_peak_x``, ``sum_peak_x``, ``hit_rate`` or
+        ``callouts``; ``min_callouts`` to be ranked, ``hit_x`` the multiple that counts as
+        a hit (default 2), ``chain="all"`` counts every chain. The kind cannot change later.
         Returns :class:`~cabalspy_id.CompetitionDetail`.
         """
         _required(name, "name")
@@ -1052,7 +1159,9 @@ class _Endpoints:
         _required(metric, "metric")
         _required(duration_hours, "duration_hours")
         body = _competition_fields(
+            creating=True,
             name=name,
+            kind=kind,
             chain=chain,
             metric=metric,
             duration_hours=duration_hours,
@@ -1061,6 +1170,8 @@ class _Endpoints:
             max_participants=max_participants,
             min_trades=min_trades,
             min_volume_usd=min_volume_usd,
+            min_callouts=min_callouts,
+            hit_x=hit_x,
             wallet_trust=wallet_trust,
             enrollment=enrollment,
             late_join=late_join,
@@ -1093,7 +1204,7 @@ class _Endpoints:
         *,
         note: str | None = None,
         name: str | _NotGiven = NOT_GIVEN,
-        chain: Chain | _NotGiven = NOT_GIVEN,
+        chain: CompetitionChain | _NotGiven = NOT_GIVEN,
         metric: CompetitionMetric | _NotGiven = NOT_GIVEN,
         duration_hours: float | _NotGiven = NOT_GIVEN,
         starts_at: str | datetime | _NotGiven | None = NOT_GIVEN,
@@ -1101,6 +1212,8 @@ class _Endpoints:
         max_participants: int | _NotGiven | None = NOT_GIVEN,
         min_trades: int | _NotGiven = NOT_GIVEN,
         min_volume_usd: float | _NotGiven = NOT_GIVEN,
+        min_callouts: int | _NotGiven = NOT_GIVEN,
+        hit_x: float | _NotGiven = NOT_GIVEN,
         wallet_trust: WalletTrust | _NotGiven = NOT_GIVEN,
         enrollment: CompetitionEnrollment | _NotGiven = NOT_GIVEN,
         late_join: bool | _NotGiven = NOT_GIVEN,
@@ -1112,10 +1225,13 @@ class _Endpoints:
         Every change is recorded (``changes``, ``rules_version``) and sent as the webhook
         ``competition.updated``; ``note`` (max 500 characters) explains it. Pass ``None`` to
         clear ``starts_at``, ``max_participants``, ``prizes`` or ``description``.
+        ``min_callouts`` / ``hit_x`` apply to callout competitions, ``min_trades`` /
+        ``min_volume_usd`` to trading ones; the kind itself cannot change.
         Returns :class:`~cabalspy_id.CompetitionDetail`.
         """
         _required(id, "id")
         fields = _competition_fields(
+            creating=False,
             name=name,
             chain=chain,
             metric=metric,
@@ -1125,6 +1241,8 @@ class _Endpoints:
             max_participants=max_participants,
             min_trades=min_trades,
             min_volume_usd=min_volume_usd,
+            min_callouts=min_callouts,
+            hit_x=hit_x,
             wallet_trust=wallet_trust,
             enrollment=enrollment,
             late_join=late_join,
@@ -1176,6 +1294,150 @@ class _Endpoints:
         _required(id, "id")
         return self._get("/competitions/standings", {"id": id, "limit": limit, "offset": offset})
 
+    # ── callouts (an extra, switched on per instance on request) ─────────
+    # A user calls a token; its price and market cap are stamped and tracked: every
+    # minute for the first 24 hours (then the day is scored on candles), after that
+    # every 5 minutes while the token is active. Tracking stops after 24 hours in a
+    # row below a $10k market cap. Without the extra every call raises
+    # PermissionError (feature_not_enabled); ``me()["features"]`` shows it.
+
+    def create_callout(
+        self,
+        external_id: str | None = None,
+        *,
+        chain: Chain,
+        mint: str,
+        note: str | None = None,
+        csid_id: str | None = None,
+    ) -> Any:
+        """POST /v1/callouts — one of your users calls a token (``note`` up to 280 characters).
+
+        The instance's settings apply: ``kol_only`` (PermissionError), holders only
+        (``not_a_holder``), one call per token and 24 hours (ConflictError ``already_called``)
+        and the cooldown between two callouts (RateLimitError ``callout_cooldown`` with
+        ``retry_after``; never retried automatically, the wait can be hours). A token without
+        a market price raises BadRequestError ``no_price`` (422).
+        Returns :class:`~cabalspy_id.Callout`.
+        """
+        who = _who(external_id, csid_id)
+        _required(chain, "chain")
+        _one_of(chain, CHAINS, "chain")
+        _required(mint, "mint")
+        if note is not None and len(note) > CALLOUT_MAX_NOTE:
+            raise BadRequestError(
+                f"note must be at most {CALLOUT_MAX_NOTE} characters.", code="invalid_parameter", parameter="note"
+            )
+        body: dict[str, Any] = {**who, "chain": chain, "mint": mint}
+        if note:
+            body["note"] = note
+        return self._post("/callouts", body)
+
+    def remove_callout(self, id: str, *, reason: str | None = None) -> Any:
+        """POST /v1/callouts/remove — takes a callout down (moderation, ``reason`` up to 200
+        characters); it leaves every list and statistic. Returns :class:`~cabalspy_id.CalloutRemoved`.
+        """
+        _required(id, "id")
+        body: dict[str, Any] = {"id": id}
+        if reason:
+            body["reason"] = reason
+        return self._post("/callouts/remove", body)
+
+    def callouts(
+        self,
+        *,
+        chain: Chain | None = None,
+        mint: str | None = None,
+        external_id: str | None = None,
+        csid_id: str | None = None,
+        since: str | datetime | None = None,
+        until: str | datetime | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/callouts — your instance's callouts, newest first (``limit`` 1-200, default 50),
+        e.g. as chart markers. ``mint`` needs ``chain``; ``external_id`` / ``csid_id`` one user's;
+        ``since`` / ``until`` bound ``called_at`` (datetimes or ISO 8601).
+
+        Returns a list of :class:`~cabalspy_id.Callout`; see ``iter_callouts``.
+        """
+        return self._get("/callouts", _callouts_query(chain, mint, external_id, csid_id, since, until, limit, cursor))
+
+    def callout(self, id: str) -> Any:
+        """GET /v1/callouts/item — one callout. Returns :class:`~cabalspy_id.Callout`."""
+        _required(id, "id")
+        return self._get("/callouts/item", {"id": id})
+
+    def callout_stats(
+        self, external_id: str | None = None, *, csid_id: str | None = None, hit_x: float | None = None
+    ) -> Any:
+        """GET /v1/callouts/stats — one user's callouts per period (6h, 1d, 7d, 30d = callouts
+        made in that period): count, average / median / best peak multiple, hit rate (percent
+        reaching ``hit_x``, default 2) and the average multiple now.
+
+        Returns :class:`~cabalspy_id.CalloutStats`.
+        """
+        who = _who(external_id, csid_id)
+        _hit_x(hit_x)
+        return self._get("/callouts/stats", {**who, "hit_x": hit_x})
+
+    def callout_leaderboard(
+        self,
+        *,
+        period: Period | None = None,
+        chain: Chain | None = None,
+        sort: CalloutSort | None = None,
+        min_callouts: int | None = None,
+        hit_x: float | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/callouts/leaderboard — your callers ranked (default 7d by ``avg_peak_x``;
+        ``limit`` 1-500, default 100). ``min_callouts`` 1-1000 to be listed.
+
+        Returns :class:`~cabalspy_id.CalloutLeaderboardResponse`; see ``iter_callout_leaderboard``.
+        """
+        return self._get(
+            "/callouts/leaderboard",
+            _callout_leaderboard_query(period, chain, sort, min_callouts, hit_x, limit, cursor),
+        )
+
+    def callout_settings(self) -> Any:
+        """GET /v1/callouts/settings. Returns :class:`~cabalspy_id.CalloutSettings`."""
+        return self._get("/callouts/settings")
+
+    def update_callout_settings(
+        self,
+        *,
+        who: CalloutWho | None = None,
+        require_holding: bool | None = None,
+        cooldown_minutes: int | None = None,
+    ) -> Any:
+        """POST /v1/callouts/settings — changes the settings you pass (None = unchanged).
+
+        ``who``: ``all`` or ``kol_only``; ``require_holding``: holders only;
+        ``cooldown_minutes``: 0-10080 between two callouts of one user.
+        Returns :class:`~cabalspy_id.CalloutSettings`.
+        """
+        _one_of(who, CALLOUT_WHO, "who")
+        if cooldown_minutes is not None and (
+            isinstance(cooldown_minutes, bool)
+            or not isinstance(cooldown_minutes, int)
+            or not 0 <= cooldown_minutes <= 10080
+        ):
+            raise BadRequestError(
+                "cooldown_minutes must be a whole number from 0 to 10080 (7 days).",
+                code="invalid_parameter",
+                parameter="cooldown_minutes",
+            )
+        changes = {
+            k: v
+            for k, v in {"who": who, "require_holding": require_holding, "cooldown_minutes": cooldown_minutes}.items()
+            if v is not None
+        }
+        if not changes:
+            raise BadRequestError("Pass at least one setting.", code="missing_parameter", parameter="settings")
+        return self._post("/callouts/settings", changes)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIENTS
@@ -1191,6 +1453,7 @@ class _BaseClient(_Endpoints):
         base_url: str | None = None,
         stream_url: str | None = None,
         theses_stream_url: str | None = None,
+        callouts_stream_url: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 2,
         headers: Mapping[str, str] | None = None,
@@ -1203,6 +1466,7 @@ class _BaseClient(_Endpoints):
         self.base_url = (base_url or _env("CABALSPY_ID_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.stream_url = (stream_url or _env("CABALSPY_ID_STREAM_URL") or DEFAULT_STREAM_URL).rstrip("/")
         self.theses_stream_url = (theses_stream_url or DEFAULT_THESES_STREAM_URL).rstrip("/")
+        self.callouts_stream_url = (callouts_stream_url or DEFAULT_CALLOUTS_STREAM_URL).rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self._extra_headers = dict(headers or {})
@@ -1325,6 +1589,20 @@ class _BaseClient(_Endpoints):
         from ._theses_stream import ThesesStream
 
         return ThesesStream(self.theses_stream_url, self._api_key, scope=scope, instance=self.instance, **kwargs)
+
+    def callouts_stream(self, *, chain: Chain | None = None, mint: str | None = None, **kwargs: Any) -> CalloutsStream:
+        """Every callout event of your instance, live (callouts extra). Async only.
+
+        ``chain`` / ``mint`` narrow it to one chain or token (``mint`` needs ``chain``).
+        Needs the ``stream`` extra: ``pip install "cabalspy-id[stream]"``.
+        """
+        if not self._api_key:
+            raise AuthenticationError("The callouts stream needs an API key.", status=401, code="missing_api_key")
+        from ._callouts_stream import CalloutsStream
+
+        return CalloutsStream(
+            self.callouts_stream_url, self._api_key, chain=chain, mint=mint, instance=self.instance, **kwargs
+        )
 
 
 class CabalSpyID(_BaseClient):
@@ -1571,6 +1849,39 @@ class CabalSpyID(_BaseClient):
         _required(id, "id")
         yield from self.offset_items("/competitions/standings", {"id": id, "limit": limit}, key="standings")
 
+    # ── callouts ─────────────────────────────────────────────────────────
+
+    def iter_callouts(
+        self,
+        *,
+        chain: Chain | None = None,
+        mint: str | None = None,
+        external_id: str | None = None,
+        csid_id: str | None = None,
+        since: str | datetime | None = None,
+        until: str | datetime | None = None,
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Every callout matching the filters, newest first, following ``next_cursor``."""
+        query = _callouts_query(chain, mint, external_id, csid_id, since, until, limit, None)
+        for page in self.pages("/callouts", query):
+            yield from page.data
+
+    def iter_callout_leaderboard(
+        self,
+        *,
+        period: Period | None = None,
+        chain: Chain | None = None,
+        sort: CalloutSort | None = None,
+        min_callouts: int | None = None,
+        hit_x: float | None = None,
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Every entry of the callers leaderboard, following ``next_cursor``."""
+        query = _callout_leaderboard_query(period, chain, sort, min_callouts, hit_x, limit, None)
+        for page in self.pages("/callouts/leaderboard", query):
+            yield from page.data.get("leaderboard", [])
+
 
 class AsyncCabalSpyID(_BaseClient):
     """Asynchronous Data API client.
@@ -1810,6 +2121,41 @@ class AsyncCabalSpyID(_BaseClient):
         _required(id, "id")
         async for item in self.offset_items("/competitions/standings", {"id": id, "limit": limit}, key="standings"):
             yield item
+
+    # ── callouts ─────────────────────────────────────────────────────────
+
+    async def iter_callouts(
+        self,
+        *,
+        chain: Chain | None = None,
+        mint: str | None = None,
+        external_id: str | None = None,
+        csid_id: str | None = None,
+        since: str | datetime | None = None,
+        until: str | datetime | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every callout matching the filters, newest first, following ``next_cursor``."""
+        query = _callouts_query(chain, mint, external_id, csid_id, since, until, limit, None)
+        async for page in self.pages("/callouts", query):
+            for item in page.data:
+                yield item
+
+    async def iter_callout_leaderboard(
+        self,
+        *,
+        period: Period | None = None,
+        chain: Chain | None = None,
+        sort: CalloutSort | None = None,
+        min_callouts: int | None = None,
+        hit_x: float | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every entry of the callers leaderboard, following ``next_cursor``."""
+        query = _callout_leaderboard_query(period, chain, sort, min_callouts, hit_x, limit, None)
+        async for page in self.pages("/callouts/leaderboard", query):
+            for entry in page.data.get("leaderboard", []):
+                yield entry
 
 
 def _users_query(params: Mapping[str, Any]) -> dict[str, Any]:

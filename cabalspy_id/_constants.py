@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.6.0"
+SDK_VERSION = "0.7.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -55,6 +55,14 @@ COMPETITION_WEBHOOK_EVENTS: tuple[str, ...] = (
     "competition.standings",
     "competition.ended",
 )
+#: Webhook events about callouts (an extra, switched on per instance). Sent per instance;
+#: ``data.callout`` is the callout, ``callout.milestone`` adds ``data.milestone_x``.
+CALLOUT_WEBHOOK_EVENTS: tuple[str, ...] = (
+    "callout.created",
+    "callout.milestone",
+    "callout.scored",
+    "callout.final",
+)
 #: Webhook event types.
 WEBHOOK_EVENTS: tuple[str, ...] = (
     "wallet.verified",
@@ -68,6 +76,7 @@ WEBHOOK_EVENTS: tuple[str, ...] = (
     "webhook.test",
     *PLATFORM_WEBHOOK_EVENTS,
     *COMPETITION_WEBHOOK_EVENTS,
+    *CALLOUT_WEBHOOK_EVENTS,
 )
 
 #: Reactions: "like" plus a fixed emoji set.
@@ -111,8 +120,47 @@ INBOUND_FORMATS: tuple[str, ...] = ("csid", "privy", "dynamic", "generic")
 
 # ── trading competitions ─────────────────────────────────────────────────────
 
-CompetitionMetric = Literal["pnl_usd", "pnl", "volume_usd", "volume", "trades", "win_rate"]
-COMPETITION_METRICS: tuple[CompetitionMetric, ...] = ("pnl_usd", "pnl", "volume_usd", "volume", "trades", "win_rate")
+#: Metrics of a trading competition (kind = trading).
+TradingCompetitionMetric = Literal["pnl_usd", "pnl", "volume_usd", "volume", "trades", "win_rate"]
+#: Metrics of a callout competition (kind = callouts): the callouts made during it, each
+#: scored by its peak multiple.
+CalloutCompetitionMetric = Literal["avg_peak_x", "best_peak_x", "sum_peak_x", "hit_rate", "callouts"]
+#: Any competition metric: the trading ones, or the callout ones for kind = callouts.
+CompetitionMetric = Literal[
+    "pnl_usd",
+    "pnl",
+    "volume_usd",
+    "volume",
+    "trades",
+    "win_rate",
+    "avg_peak_x",
+    "best_peak_x",
+    "sum_peak_x",
+    "hit_rate",
+    "callouts",
+]
+#: Metrics of trading competitions.
+COMPETITION_METRICS: tuple[TradingCompetitionMetric, ...] = (
+    "pnl_usd",
+    "pnl",
+    "volume_usd",
+    "volume",
+    "trades",
+    "win_rate",
+)
+#: Metrics of callout competitions (kind = callouts).
+CALLOUT_COMPETITION_METRICS: tuple[CalloutCompetitionMetric, ...] = (
+    "avg_peak_x",
+    "best_peak_x",
+    "sum_peak_x",
+    "hit_rate",
+    "callouts",
+)
+#: trading: ranked on trades (default); callouts: ranked on callouts (needs the callouts extra).
+CompetitionKind = Literal["trading", "callouts"]
+COMPETITION_KINDS: tuple[CompetitionKind, ...] = ("trading", "callouts")
+#: A competition's chain; "all" (every chain) only for callout competitions.
+CompetitionChain = Literal["solana", "bnb", "base", "eth", "rh", "all"]
 #: waiting: the start time passed, but fewer than min_participants joined.
 CompetitionStatus = Literal["scheduled", "waiting", "running", "ended", "cancelled"]
 COMPETITION_STATUSES: tuple[CompetitionStatus, ...] = ("scheduled", "waiting", "running", "ended", "cancelled")
@@ -121,3 +169,39 @@ CompetitionEnrollment = Literal["opt_in", "all_users"]
 COMPETITION_ENROLLMENTS: tuple[CompetitionEnrollment, ...] = ("opt_in", "all_users")
 #: Scheduled + running competitions at a time per developer account.
 MAX_OPEN_COMPETITIONS = 5
+
+# ── callouts (an extra, switched on per instance on request) ─────────────────
+
+#: The ``features`` entry in ``me()`` when callouts are switched on for the instance.
+FEATURE_CALLOUTS = "callouts"
+DEFAULT_CALLOUTS_STREAM_URL = "wss://api-id.cabalspy.xyz/v1/callouts/stream"
+#: Leaderboard sorts of the callers leaderboard.
+CalloutSort = Literal["avg_peak_x", "best_peak_x", "sum_peak_x", "hit_rate", "callouts", "median_peak_x"]
+CALLOUT_SORTS: tuple[CalloutSort, ...] = (
+    "avg_peak_x",
+    "best_peak_x",
+    "sum_peak_x",
+    "hit_rate",
+    "callouts",
+    "median_peak_x",
+)
+#: Who may make callouts: every user, or only users with the KOL badge.
+CalloutWho = Literal["all", "kol_only"]
+CALLOUT_WHO: tuple[CalloutWho, ...] = ("all", "kol_only")
+#: tracking: still tracked; final: tracking stopped (removed callouts are never returned).
+CalloutStatus = Literal["tracking", "final"]
+#: first_day: read every minute; extended: every 5 minutes while active; stopped.
+CalloutPhase = Literal["first_day", "extended", "stopped"]
+#: candles: the first day was scored on price candles; live: no candles, the live numbers stand.
+CalloutFirstDayKind = Literal["candles", "live"]
+#: Maximum note length in characters (at most one link).
+CALLOUT_MAX_NOTE = 280
+#: Default ``hit_x``: a callout is a hit once its peak multiple reaches it.
+CALLOUT_DEFAULT_HIT_X = 2.0
+#: Multiples announced once each as ``callout.milestone``.
+CALLOUT_MILESTONES: tuple[int, ...] = (2, 3, 5, 10, 20, 50, 100)
+#: After the first day, a token below this market cap (USD) for 24 hours in a row is
+#: inactive and tracking stops.
+CALLOUT_ACTIVE_MCAP_USD = 10_000
+#: Callout stream connections per API key.
+MAX_CALLOUT_STREAMS_PER_KEY = 5
