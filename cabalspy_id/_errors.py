@@ -80,7 +80,11 @@ class CabalSpyIDError(Exception):
 
 class BadRequestError(CabalSpyIDError):
     """400 — missing_parameter, invalid_parameter, instance_required; platform users:
-    wallet_required, invalid_address, invalid_return_url, invalid_body."""
+    wallet_required, invalid_address, invalid_return_url, invalid_body.
+
+    Also 422 — callouts: no_price (the token has no market price yet, so a callout
+    could not be tracked). ``status`` keeps the real HTTP status.
+    """
 
 
 class AuthenticationError(CabalSpyIDError):
@@ -89,7 +93,12 @@ class AuthenticationError(CabalSpyIDError):
 
 class PermissionError_(CabalSpyIDError):
     """403 — invalid_api_key, product_not_enabled, no_instance, scope_not_allowed;
-    public thesis API: origin_not_allowed; platform users: claim_disabled."""
+    public thesis API: origin_not_allowed; platform users: claim_disabled.
+
+    Callouts: feature_not_enabled (callouts, and callout competitions, are switched on
+    per instance on request), invalid_account, kol_only, not_a_holder, posting_paused,
+    consent_required, sandbox_user.
+    """
 
 
 class PlanUserLimitError(PermissionError_):
@@ -107,7 +116,7 @@ class PlanUserLimitError(PermissionError_):
 class NotFoundError(CabalSpyIDError):
     """404 — profile_not_found, wallet_not_found, instance_not_found; platform users:
     platform_user_not_found, verification_not_found, invalid_inbound_url;
-    competitions: competition_not_found."""
+    competitions: competition_not_found; callouts: callout_not_found."""
 
 
 class ConflictError(CabalSpyIDError):
@@ -116,14 +125,17 @@ class ConflictError(CabalSpyIDError):
     Platform users: account_claimed, last_wallet, too_many_wallets,
     wallet_already_verified, already_verified, kol_badge, x_required,
     kol_not_eligible, volume_check_unavailable. Competitions: competition_limit,
-    competition_closed, competition_full, late_join_closed.
+    competition_closed, competition_full, late_join_closed. Callouts: already_called
+    (the user called this token less than 24 hours ago).
     """
 
 
 class RateLimitError(CabalSpyIDError):
     """429 — rate_limit_exceeded; public thesis API: rate_limited (Retry-After 60);
     platform users: rate_limited (new users or inbound events per minute),
-    too_many_open_verifications."""
+    too_many_open_verifications; callouts: callout_cooldown (the instance's cooldown
+    between two callouts of a user; ``retry_after`` can be hours, so it is never
+    retried automatically); streams: too_many_connections."""
 
     def __init__(self, message: str, *, retry_after: float | None = None, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
@@ -199,8 +211,11 @@ def error_from_status(
         "body": body,
     }
     message = b.get("message") or fallback
+    body_wait = b.get("retry_after")
+    if retry_after is None and isinstance(body_wait, (int, float)) and not isinstance(body_wait, bool):
+        retry_after = float(body_wait)
 
-    if status == 400:
+    if status in (400, 422):
         return BadRequestError(message, **kwargs)
     if status == 401:
         return AuthenticationError(message, **kwargs)
@@ -219,6 +234,12 @@ def error_from_status(
     return CabalSpyIDError(message, **kwargs)
 
 
+#: 429 codes that are not worth an automatic retry (the wait can be hours).
+NOT_RETRYABLE_CODES = frozenset({"callout_cooldown"})
+
+
 def is_retryable(exc: BaseException) -> bool:
     """True for failures where retrying with backoff is worthwhile."""
+    if isinstance(exc, CabalSpyIDError) and exc.code in NOT_RETRYABLE_CODES:
+        return False
     return isinstance(exc, (RateLimitError, ServerError, APIConnectionError))

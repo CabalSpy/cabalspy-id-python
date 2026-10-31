@@ -14,8 +14,15 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 from ._constants import (
+    CalloutFirstDayKind,
+    CalloutPhase,
+    CalloutSort,
+    CalloutStatus,
+    CalloutWho,
     Chain,
+    CompetitionChain,
     CompetitionEnrollment,
+    CompetitionKind,
     CompetitionMetric,
     CompetitionStatus,
     Currency,
@@ -70,6 +77,8 @@ class MeResponse(TypedDict):
     #: Whether scope="global" is available (Enterprise).
     global_scope: bool
     users_with_data: int
+    #: Extras switched on for the instance by CabalSpy, e.g. ``["callouts"]``.
+    features: list[str]
 
 
 # ── users ────────────────────────────────────────────────────────────────────
@@ -1123,13 +1132,28 @@ class CompetitionChange(TypedDict):
     note: str | None
 
 
-class Competition(TypedDict):
-    """A competition as listed (GET /v1/competitions)."""
+class _CompetitionKindFields(TypedDict, total=False):
+    #: Trading competitions only.
+    min_trades: int
+    min_volume_usd: float
+    #: Callout competitions only: callouts needed to be ranked, and the multiple that counts as a hit.
+    min_callouts: int
+    hit_x: float
+
+
+class Competition(_CompetitionKindFields):
+    """A competition as listed (GET /v1/competitions).
+
+    Trading competitions carry ``min_trades`` and ``min_volume_usd``; callout
+    competitions (``kind`` = callouts) ``min_callouts`` and ``hit_x``.
+    """
 
     id: str
     name: str
     description: str | None
-    chain: Chain
+    kind: CompetitionKind
+    #: "all" (every chain) only for callout competitions.
+    chain: CompetitionChain
     chain_name: str
     metric: CompetitionMetric
     wallet_trust: WalletTrust
@@ -1143,8 +1167,6 @@ class Competition(TypedDict):
     min_participants: int
     max_participants: int | None
     participants: int
-    min_trades: int
-    min_volume_usd: float
     late_join: bool
     prizes: Any
     rules_version: int
@@ -1166,8 +1188,22 @@ class CompetitionParticipant(TypedDict):
     joined_at: str | None
 
 
+class CalloutBestCall(TypedDict):
+    """A caller's best callout (highest peak multiple)."""
+
+    id: str
+    chain: Chain
+    mint: str
+    symbol: str | None
+    peak_x: float | None
+
+
 class CompetitionStanding(TypedDict, total=False):
-    """One trader. Unranked traders (below the minimums) have ``rank`` None."""
+    """One trader. Unranked traders (below the minimums) have ``rank`` None.
+
+    Trading competitions carry the trading stats (pnl ... wallets); callout
+    competitions the callout stats (callouts ... best_call).
+    """
 
     rank: int | None
     ranked: bool
@@ -1187,6 +1223,16 @@ class CompetitionStanding(TypedDict, total=False):
     win_rate: float
     tokens: int
     wallets: int
+    # callout competitions
+    callouts: int
+    avg_peak_x: float | None
+    median_peak_x: float | None
+    best_peak_x: float | None
+    sum_peak_x: float
+    hits: int
+    #: Percent (0-100) of the callouts that reached ``hit_x``.
+    hit_rate: float
+    best_call: CalloutBestCall | None
 
 
 class CompetitionStandings(TypedDict):
@@ -1208,3 +1254,191 @@ class CompetitionMembership(TypedDict, total=False):
     already: bool
     #: leave: whether the user was a participant.
     left: bool
+
+
+# ── callouts (an extra, switched on per instance on request) ─────────────────
+
+
+class CalloutUser(TypedDict, total=False):
+    """The caller. A user without a profile row only has ``csid_id``."""
+
+    csid_id: str
+    #: Your platform's user id (white-label), else None.
+    external_id: str | None
+    name: str | None
+    username: str | None
+    avatar_url: str | None
+    kol: bool
+
+
+class CalloutToken(TypedDict):
+    name: str | None
+    symbol: str | None
+    logo: str | None
+
+
+class CalloutPrice(TypedDict):
+    price_usd: float | None
+    market_cap_usd: float | None
+
+
+class CalloutQuote(CalloutPrice):
+    #: Multiple against the entry price (price / entry).
+    x: float | None
+    at: str | None
+
+
+class CalloutTracking(TypedDict):
+    active: bool
+    phase: CalloutPhase
+    next_check_at: str | None
+    #: After the first day: since when the market cap is below $10k (tracking stops after
+    #: 24 h in a row below it). None while at or above it, and once tracking stopped.
+    below_10k_since: str | None
+    #: Daily candle checks done after the first day.
+    daily_checks: int
+    stopped_at: str | None
+    #: inactive (24 h below a $10k market cap) or no_price.
+    stop_reason: str | None
+
+
+class CalloutFirstDay(TypedDict):
+    """The first 24 hours, scored on candles once they are over."""
+
+    kind: CalloutFirstDayKind
+    entry_price_usd: float | None
+    #: candles only (None for kind = live).
+    peak_x: float | None
+    close_x: float | None
+    minutes_to_peak: int | None
+    #: e.g. STALE_ENTRY, NO_TRADES_AFTER, NO_TRADES_LAST_6H, EXTREME_MULTIPLE, CANDLES_UNAVAILABLE.
+    flags: list[str]
+
+
+class _CalloutOptional(TypedDict, total=False):
+    #: Present once the first day is scored (``callout.scored``).
+    first_day: CalloutFirstDay
+
+
+class Callout(_CalloutOptional):
+    """A callout: a user called a token; price and market cap are stamped and tracked."""
+
+    id: str
+    chain: Chain
+    mint: str
+    token: CalloutToken
+    author: CalloutUser
+    note: str | None
+    called_at: str
+    #: The end of the first day (called_at + 24 h).
+    window_ends_at: str
+    status: CalloutStatus
+    #: Price and market cap at the call.
+    at_call: CalloutPrice
+    now: CalloutQuote
+    peak: CalloutQuote
+    #: The score: the peak multiple since the call.
+    score_x: float | None
+    #: Market data provider of the numbers.
+    source: str | None
+    tracking: CalloutTracking
+
+
+class CalloutRemoved(TypedDict):
+    id: str
+    removed: bool
+
+
+class CalloutSummary(TypedDict):
+    """Peak multiples of a set of callouts."""
+
+    callouts: int
+    avg_peak_x: float | None
+    median_peak_x: float | None
+    best_peak_x: float | None
+    sum_peak_x: float
+    #: Callouts whose peak multiple reached ``hit_x``.
+    hits: int
+    #: Percent (0-100) of the callouts that reached ``hit_x``.
+    hit_rate: float
+
+
+class CalloutPeriodStats(CalloutSummary):
+    """One period: the callouts made in the last 6h / 1d / 7d / 30d."""
+
+    #: Average multiple right now.
+    avg_now_x: float | None
+    #: Callouts of the period that are still tracked.
+    tracking: int
+
+
+class CalloutStats(TypedDict):
+    user: CalloutUser | None
+    hit_x: float
+    #: Keys 6h, 1d, 7d, 30d.
+    periods: dict[str, CalloutPeriodStats]
+    callouts_all_time: int
+
+
+class CalloutLeaderboardEntry(CalloutSummary):
+    rank: int
+    csid_id: str
+    author: CalloutUser | None
+    best_call: CalloutBestCall
+
+
+class CalloutLeaderboardResponse(TypedDict):
+    period: Period
+    chain: Chain | None
+    sort: CalloutSort
+    hit_x: float
+    leaderboard: list[CalloutLeaderboardEntry]
+
+
+class CalloutSettings(TypedDict):
+    #: all, or kol_only (only users with the KOL badge).
+    who: CalloutWho
+    #: Only holders of the token may call it.
+    require_holding: bool
+    #: Minutes between two callouts of one user (0-10080).
+    cooldown_minutes: int
+
+
+class CalloutMilestone(Callout):
+    """Stream event ``callout.milestone``: the callout plus the multiple reached."""
+
+    milestone_x: float
+
+
+class CalloutUpdate(TypedDict):
+    """Stream event ``callout.update``: a new price of a tracked callout."""
+
+    id: str
+    chain: Chain
+    mint: str
+    price_usd: float
+    market_cap_usd: float | None
+    x: float | None
+    peak_x: float
+
+
+class CalloutRemovedEvent(TypedDict):
+    """Stream event ``callout.removed``: the platform took a callout down."""
+
+    id: str
+    chain: Chain
+    mint: str
+
+
+class CalloutsStreamReady(TypedDict):
+    events: list[str]
+    chain: Chain | None
+    mint: str | None
+
+
+class CalloutWebhookData(TypedDict, total=False):
+    """``data`` of the webhooks callout.created / .milestone / .scored / .final."""
+
+    callout: Callout
+    #: callout.milestone only.
+    milestone_x: float

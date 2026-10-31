@@ -21,7 +21,7 @@ pip install "cabalspy-id[stream]"
 | | |
 |---|---|
 | `CabalSpyIDAuth` / `AsyncCabalSpyIDAuth` | OpenID Connect for your server: PKCE, code exchange, refresh, revoke, userinfo, ID token verification (ES256 / JWKS) |
-| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream, white-label platform users and trading competitions |
+| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream, white-label platform users, trading competitions and callouts (on request) |
 | `ThesisClient` / `AsyncThesisClient` | public token thesis API with your public `client_id` and a user's access token, plus `live()` updates |
 | `verify_webhook` | Standard Webhooks signature verification |
 
@@ -38,6 +38,7 @@ Everything for developers — instance (client_id), client secrets, redirect URI
 - **Trader profiles** — X profile, verified wallets, holdings, PnL calendar
 - **KOL badges** — reviewed badges for influential traders, shown wherever they sign in
 - **White-label** — keep your own login, import your users and their wallets, run trading competitions
+- **Callouts** (on request) — your users call tokens; every call is stamped and tracked, with a score, a callers leaderboard and callout competitions
 
 ## Packages
 
@@ -55,7 +56,7 @@ One codebase, one version line. The focused packages re-export parts of `cabalsp
 | Import | Contents |
 |---|---|
 | `cabalspy_id` | everything |
-| `cabalspy_id.api` | `CabalSpyID`, `AsyncCabalSpyID`, `CabalSpyIDStream`, `CabalSpyIDAuth`, `verify_webhook`, errors and Data API types |
+| `cabalspy_id.api` | `CabalSpyID`, `AsyncCabalSpyID`, `CabalSpyIDStream`, `CalloutsStream`, `CabalSpyIDAuth`, `verify_webhook`, errors and Data API types |
 | `cabalspy_id.thesis` | `CabalSpyID` (thesis methods), `ThesisClient`, `AsyncThesisClient`, `ThesisLive`, `ThesesStream`, thesis types |
 
 The objects are the same as in `cabalspy_id`.
@@ -230,13 +231,13 @@ except RateLimitError as err:
 
 | Class | Status | Codes |
 |---|---|---|
-| `BadRequestError` | 400 | `missing_parameter`, `invalid_parameter`, `instance_required`, `wallet_required`, `invalid_address`, `invalid_return_url` |
+| `BadRequestError` | 400, 422 | `missing_parameter`, `invalid_parameter`, `instance_required`, `wallet_required`, `invalid_address`, `invalid_return_url`, `no_price` (422) |
 | `AuthenticationError` | 401 | `missing_api_key` |
-| `PermissionError` | 403 | `invalid_api_key`, `product_not_enabled`, `no_instance`, `scope_not_allowed`, `claim_disabled` |
+| `PermissionError` | 403 | `invalid_api_key`, `product_not_enabled`, `no_instance`, `scope_not_allowed`, `claim_disabled`, `feature_not_enabled`, `kol_only`, `not_a_holder`, `invalid_account`, `posting_paused`, `consent_required`, `sandbox_user` |
 | `PlanUserLimitError` | 403 | `plan_user_limit` |
-| `NotFoundError` | 404 | `profile_not_found`, `wallet_not_found`, `instance_not_found`, `platform_user_not_found`, `verification_not_found`, `competition_not_found` |
-| `ConflictError` | 409 | `account_claimed`, `last_wallet`, `too_many_wallets`, `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`, `competition_closed`, `competition_full`, `late_join_closed` |
-| `RateLimitError` | 429 | `rate_limit_exceeded`, `rate_limited`, `too_many_open_verifications` |
+| `NotFoundError` | 404 | `profile_not_found`, `wallet_not_found`, `instance_not_found`, `platform_user_not_found`, `verification_not_found`, `competition_not_found`, `callout_not_found` |
+| `ConflictError` | 409 | `account_claimed`, `last_wallet`, `too_many_wallets`, `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`, `competition_closed`, `competition_full`, `late_join_closed`, `already_called` |
+| `RateLimitError` | 429 | `rate_limit_exceeded`, `rate_limited`, `too_many_open_verifications`, `callout_cooldown` |
 | `ServerError` | 5xx | `internal_error`, `service_unavailable` |
 | `APIConnectionError` | – | network failure, timeout |
 | `OAuthError` | 4xx | OAuth errors from the login endpoints (`invalid_grant`, `invalid_client`, …) |
@@ -244,7 +245,7 @@ except RateLimitError as err:
 | `WebhookVerificationError` | – | webhook signature or timestamp invalid |
 | `PlatformImportError` | – | `bulk_import_platform_users` stopped; carries `result` and `remaining` |
 
-`429`, `5xx` and network errors are retried with exponential backoff (default 2 retries); `Retry-After` wins. Writes (POST) are retried only after the API-wide rate limit (`rate_limit_exceeded`), since they did not run. The rate limit of the last call is in `csid.last_rate_limit` (`X-RateLimit-Limit/Remaining/Reset`).
+`429`, `5xx` and network errors are retried with exponential backoff (default 2 retries); `Retry-After` wins. Writes (POST) are retried only after the API-wide rate limit (`rate_limit_exceeded`), since they did not run. `callout_cooldown` is never retried: the wait (`retry_after`) can be hours. The rate limit of the last call is in `csid.last_rate_limit` (`X-RateLimit-Limit/Remaining/Reset`).
 
 ## White-label (platform users)
 
@@ -328,6 +329,82 @@ Individual competitions between your platform users, at most 5 scheduled + runni
 The competition routes page by `offset`; the `iter_*` helpers walk them until `pagination.total`.
 
 Webhooks: `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired`, and per instance `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (`PLATFORM_WEBHOOK_EVENTS`, `COMPETITION_WEBHOOK_EVENTS`).
+
+## Callouts (on request)
+
+Callouts are an extra for CabalSpy ID instances: **they are switched on per instance on request** (contact CabalSpy). Until then every callout call raises `PermissionError` with the code `feature_not_enabled`; `csid.me()["features"]` lists `"callouts"` once they are on.
+
+A user calls a token: its price and market cap are stamped at that moment and tracked.
+
+- **First 24 hours:** read every minute (current and peak multiple, milestones 2x, 3x, 5x, 10x, ...), then the day is scored on price candles (`first_day`, webhook `callout.scored`).
+- **After that:** read every 5 minutes while the token is active, plus each day's candles. Tracking stops after 24 hours in a row below a $10k market cap (`tracking.below_10k_since`, then `callout.final`).
+
+A callout's score is `score_x`, its peak multiple since the call. On top: stats per user and period, a callers leaderboard, a live stream, webhooks and callout competitions.
+
+```python
+from cabalspy_id import CabalSpyID, ConflictError, RateLimitError
+
+csid = CabalSpyID()
+
+try:
+    c = csid.create_callout("user_42", chain="solana", mint=MINT, note="Undervalued, team ships")
+    print(c["at_call"]["market_cap_usd"], c["score_x"])
+except ConflictError:              # already_called: one call per token and 24 hours
+    pass
+except RateLimitError as err:      # callout_cooldown: the instance's cooldown, never retried
+    print("next callout in", err.retry_after, "seconds")
+
+for c in csid.iter_callouts(chain="solana", mint=MINT):           # chart markers, newest first
+    print(c["called_at"], c["author"]["name"], c["peak"]["x"], c["tracking"]["phase"])
+
+stats = csid.callout_stats("user_42", hit_x=2)                     # per period: 6h, 1d, 7d, 30d
+print(stats["periods"]["7d"]["avg_peak_x"], stats["periods"]["7d"]["hit_rate"])
+
+board = csid.callout_leaderboard(period="7d", sort="avg_peak_x", min_callouts=3)
+for e in board["leaderboard"]:
+    print(e["rank"], e["author"]["name"], e["avg_peak_x"], e["best_call"]["symbol"])
+
+csid.update_callout_settings(who="all", require_holding=True, cooldown_minutes=360)
+```
+
+| Method | Endpoint |
+|---|---|
+| `create_callout(external_id \| csid_id=, chain=, mint=, note=)` | `POST /v1/callouts` |
+| `remove_callout(id, reason=)` | `POST /v1/callouts/remove` (moderation) |
+| `callouts(chain=, mint=, external_id=, csid_id=, since=, until=, limit=, cursor=)` / `iter_callouts()` | `GET /v1/callouts` |
+| `callout(id)` | `GET /v1/callouts/item` |
+| `callout_stats(external_id \| csid_id=, hit_x=)` | `GET /v1/callouts/stats` |
+| `callout_leaderboard(period=, chain=, sort=, min_callouts=, hit_x=, limit=, cursor=)` / `iter_callout_leaderboard()` | `GET /v1/callouts/leaderboard` |
+| `callout_settings()` / `update_callout_settings(who=, require_holding=, cooldown_minutes=)` | `GET` / `POST /v1/callouts/settings` |
+| `callouts_stream(chain=, mint=)` | `WS /v1/callouts/stream` |
+
+**A callout** (`Callout`): `at_call` (price and market cap at the call), `now` and `peak` (price, market cap, multiple `x`, time), `score_x`, `status` (`tracking` or `final`), `tracking` (`active`, `phase` = `first_day` / `extended` / `stopped`, `next_check_at`, `below_10k_since`, `daily_checks`, `stopped_at`, `stop_reason`) and, once the first day is scored, `first_day` (`kind` = `candles` or `live`, `peak_x`, `close_x`, `minutes_to_peak`, `flags`).
+
+**Stats and leaderboard.** Per period (the callouts made in the last 6h / 1d / 7d / 30d): `callouts`, `avg_peak_x`, `median_peak_x`, `best_peak_x`, `sum_peak_x`, `hits` and `hit_rate` (percent of callouts whose peak reached `hit_x`, default 2), plus `avg_now_x` and `tracking` in the stats. The leaderboard sorts by `avg_peak_x` (default), `best_peak_x`, `sum_peak_x`, `hit_rate`, `callouts` or `median_peak_x`; each entry has `best_call`.
+
+**Settings.** `who` (`all` or `kol_only`), `require_holding` (only holders may call a token, default on), `cooldown_minutes` (0-10080 between two callouts of one user, default 360). Errors on `create_callout`: `kol_only`, `not_a_holder`, `posting_paused` (`PermissionError`), `already_called` (`ConflictError`), `callout_cooldown` (`RateLimitError` with `retry_after`), `no_price` (`BadRequestError`, 422).
+
+**Live stream** (async, needs `cabalspy-id[stream]`):
+
+```python
+async with AsyncCabalSpyID() as csid:
+    async with csid.callouts_stream(chain="solana") as cs:    # mint= one token (needs chain)
+        async for ev in cs:
+            if ev["event"] == "callout.milestone":
+                print(ev["data"]["token"]["symbol"], ev["data"]["milestone_x"], "x")
+```
+
+Events: `callout.created`, `callout.update` (a new price: `price_usd`, `market_cap_usd`, `x`, `peak_x`), `callout.milestone` (the callout plus `milestone_x`), `callout.scored`, `callout.final`, `callout.removed`, plus `ready`, `heartbeat`, `pong`, `open`, `close`, `reconnecting`, `error`. `feature_not_enabled` and `invalid_api_key` are fatal; `too_many_connections` (at most 5 per key) reconnects with backoff.
+
+**Callout competitions.** `create_competition(kind="callouts", ...)` ranks your users on the callouts they make during the competition: metrics `avg_peak_x`, `best_peak_x`, `sum_peak_x`, `hit_rate`, `callouts`; `min_callouts` to be ranked, `hit_x` the multiple that counts as a hit, and `chain="all"` to count every chain. Standings carry the callout stats and `best_call`. The kind cannot change later; `min_trades` / `min_volume_usd` belong to trading competitions.
+
+```python
+comp = csid.create_competition(name="Caller of the week", kind="callouts", chain="all",
+                               metric="avg_peak_x", duration_hours=168, min_callouts=3, hit_x=2,
+                               enrollment="all_users")
+```
+
+A full tour is in [`examples/callouts.py`](examples/callouts.py).
 
 ## Token theses
 
@@ -477,7 +554,7 @@ The server sends a heartbeat every 30 seconds. The client reconnects with expone
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`).
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`). Callouts add `callout.created`, `callout.milestone`, `callout.scored`, `callout.final` (`data.callout`; `CALLOUT_WEBHOOK_EVENTS`).
 
 ```python
 from cabalspy_id import verify_webhook
@@ -499,6 +576,7 @@ CabalSpyID(
     instance=None,         # client_id, when the account has several instances
     base_url="https://api-id.cabalspy.xyz/v1",
     stream_url="wss://api-id.cabalspy.xyz/v1/stream",
+    callouts_stream_url="wss://api-id.cabalspy.xyz/v1/callouts/stream",
     timeout=30.0,
     max_retries=2,
     headers={},

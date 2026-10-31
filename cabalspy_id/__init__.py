@@ -1,8 +1,8 @@
 """CabalSpy ID — the verified social layer for crypto trading.
 
 Login with CabalSpy ID (OpenID Connect), the Data API for verified wallets, KOL
-badges, trading stats and token theses, white-label platform users and trading
-competitions, the live stream, the public thesis API and webhook verification.
+badges, trading stats and token theses, white-label platform users, trading
+competitions, callouts, the live stream, the public thesis API and webhook verification.
 
     from cabalspy_id import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -16,22 +16,34 @@ Docs: https://docs.cabalspy.xyz/cabalspy-id
 
 from ._client import AsyncCabalSpyID, CabalSpyID, Envelope
 from ._constants import (
+    CALLOUT_ACTIVE_MCAP_USD,
+    CALLOUT_COMPETITION_METRICS,
+    CALLOUT_DEFAULT_HIT_X,
+    CALLOUT_MAX_NOTE,
+    CALLOUT_MILESTONES,
+    CALLOUT_SORTS,
+    CALLOUT_WEBHOOK_EVENTS,
+    CALLOUT_WHO,
     CHAINS,
     CLIENT_ID_HEADER,
     COMPETITION_ENROLLMENTS,
+    COMPETITION_KINDS,
     COMPETITION_METRICS,
     COMPETITION_STATUSES,
     COMPETITION_WEBHOOK_EVENTS,
     CURRENCY_BY_CHAIN,
     DATA_SCOPES,
     DEFAULT_BASE_URL,
+    DEFAULT_CALLOUTS_STREAM_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
     DEFAULT_THESIS_URL,
     DEFAULT_THESIS_WS_URL,
+    FEATURE_CALLOUTS,
     INBOUND_FORMATS,
     LEADERBOARD_SORTS,
+    MAX_CALLOUT_STREAMS_PER_KEY,
     MAX_OPEN_COMPETITIONS,
     MAX_REQUEST_BODY_BYTES,
     MAX_THESES_STREAM_TOKENS,
@@ -48,8 +60,16 @@ from ._constants import (
     THESIS_SCOPES,
     WALLET_TRUST,
     WEBHOOK_EVENTS,
+    CalloutCompetitionMetric,
+    CalloutFirstDayKind,
+    CalloutPhase,
+    CalloutSort,
+    CalloutStatus,
+    CalloutWho,
     Chain,
+    CompetitionChain,
     CompetitionEnrollment,
+    CompetitionKind,
     CompetitionMetric,
     CompetitionStatus,
     Currency,
@@ -67,6 +87,7 @@ from ._constants import (
     ThesisScope,
     ThesisSort,
     ThesisStance,
+    TradingCompetitionMetric,
     VerificationStatus,
     WalletTrust,
 )
@@ -102,6 +123,26 @@ from ._types import (
     ActiveHoldings,
     ActiveTokens,
     CabalSpyIDClaims,
+    Callout,
+    CalloutBestCall,
+    CalloutFirstDay,
+    CalloutLeaderboardEntry,
+    CalloutLeaderboardResponse,
+    CalloutMilestone,
+    CalloutPeriodStats,
+    CalloutPrice,
+    CalloutQuote,
+    CalloutRemoved,
+    CalloutRemovedEvent,
+    CalloutSettings,
+    CalloutsStreamReady,
+    CalloutStats,
+    CalloutSummary,
+    CalloutToken,
+    CalloutTracking,
+    CalloutUpdate,
+    CalloutUser,
+    CalloutWebhookData,
     Competition,
     CompetitionChange,
     CompetitionDetail,
@@ -210,6 +251,10 @@ def __getattr__(name: str) -> object:
         from . import _theses_stream
 
         return getattr(_theses_stream, name)
+    if name in ("CalloutsStream", "CALLOUTS_STREAM_EVENTS", "CALLOUT_EVENTS"):
+        from . import _callouts_stream
+
+        return getattr(_callouts_stream, name)
     raise AttributeError(f"module 'cabalspy_id' has no attribute {name!r}")
 
 
@@ -220,6 +265,7 @@ __all__ = [
     "AsyncCabalSpyID",
     "CabalSpyIDStream",
     "ThesesStream",
+    "CalloutsStream",
     "Envelope",
     "CabalSpyIDAuth",
     "AsyncCabalSpyIDAuth",
@@ -409,4 +455,48 @@ __all__ = [
     "CompetitionStanding",
     "CompetitionStandings",
     "CompetitionMembership",
+    # callouts
+    "CALLOUTS_STREAM_EVENTS",
+    "CALLOUT_EVENTS",
+    "CALLOUT_WEBHOOK_EVENTS",
+    "CALLOUT_COMPETITION_METRICS",
+    "COMPETITION_KINDS",
+    "CALLOUT_SORTS",
+    "CALLOUT_WHO",
+    "CALLOUT_MAX_NOTE",
+    "CALLOUT_DEFAULT_HIT_X",
+    "CALLOUT_MILESTONES",
+    "CALLOUT_ACTIVE_MCAP_USD",
+    "MAX_CALLOUT_STREAMS_PER_KEY",
+    "DEFAULT_CALLOUTS_STREAM_URL",
+    "FEATURE_CALLOUTS",
+    "TradingCompetitionMetric",
+    "CalloutCompetitionMetric",
+    "CompetitionKind",
+    "CompetitionChain",
+    "CalloutSort",
+    "CalloutWho",
+    "CalloutStatus",
+    "CalloutPhase",
+    "CalloutFirstDayKind",
+    "Callout",
+    "CalloutUser",
+    "CalloutToken",
+    "CalloutPrice",
+    "CalloutQuote",
+    "CalloutTracking",
+    "CalloutFirstDay",
+    "CalloutRemoved",
+    "CalloutSummary",
+    "CalloutPeriodStats",
+    "CalloutStats",
+    "CalloutBestCall",
+    "CalloutLeaderboardEntry",
+    "CalloutLeaderboardResponse",
+    "CalloutSettings",
+    "CalloutMilestone",
+    "CalloutUpdate",
+    "CalloutRemovedEvent",
+    "CalloutsStreamReady",
+    "CalloutWebhookData",
 ]
