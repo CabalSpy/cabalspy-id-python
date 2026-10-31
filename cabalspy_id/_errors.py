@@ -79,7 +79,8 @@ class CabalSpyIDError(Exception):
 
 
 class BadRequestError(CabalSpyIDError):
-    """400 — missing_parameter, invalid_parameter, instance_required."""
+    """400 — missing_parameter, invalid_parameter, instance_required; platform users:
+    wallet_required, invalid_address, invalid_return_url, invalid_body."""
 
 
 class AuthenticationError(CabalSpyIDError):
@@ -88,25 +89,41 @@ class AuthenticationError(CabalSpyIDError):
 
 class PermissionError_(CabalSpyIDError):
     """403 — invalid_api_key, product_not_enabled, no_instance, scope_not_allowed;
-    public thesis API: origin_not_allowed."""
+    public thesis API: origin_not_allowed; platform users: claim_disabled."""
 
 
 class PlanUserLimitError(PermissionError_):
     """403 — plan_user_limit.
 
     The person signed in beyond the plan's user limit: the platform receives no
-    data for them until it upgrades.
+    data for them until it upgrades. Creating a platform user beyond the limit
+    raises it too; ``body`` then carries ``user_limit`` (and ``users``, ``plan``
+    on live instances).
     """
 
     limited = True
 
 
 class NotFoundError(CabalSpyIDError):
-    """404 — profile_not_found, wallet_not_found, instance_not_found."""
+    """404 — profile_not_found, wallet_not_found, instance_not_found; platform users:
+    platform_user_not_found, verification_not_found, invalid_inbound_url;
+    competitions: competition_not_found."""
+
+
+class ConflictError(CabalSpyIDError):
+    """409 — the request conflicts with the current state.
+
+    Platform users: account_claimed, last_wallet, too_many_wallets,
+    wallet_already_verified, already_verified, kol_badge, x_required,
+    kol_not_eligible, volume_check_unavailable. Competitions: competition_limit,
+    competition_closed, competition_full, late_join_closed.
+    """
 
 
 class RateLimitError(CabalSpyIDError):
-    """429 — rate_limit_exceeded; public thesis API: rate_limited (Retry-After 60)."""
+    """429 — rate_limit_exceeded; public thesis API: rate_limited (Retry-After 60);
+    platform users: rate_limited (new users or inbound events per minute),
+    too_many_open_verifications."""
 
     def __init__(self, message: str, *, retry_after: float | None = None, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
@@ -147,6 +164,21 @@ class WebhookVerificationError(CabalSpyIDError):
     """A webhook failed signature or timestamp verification."""
 
 
+class PlatformImportError(CabalSpyIDError):
+    """A bulk import stopped before every user was sent.
+
+    ``result`` holds the results of the users that were imported (same shape as
+    the return value), ``remaining`` the users that were not; pass them to
+    ``bulk_import_platform_users`` again to resume. The error that stopped the
+    import is ``__cause__`` (its ``status`` and ``code`` are copied here).
+    """
+
+    def __init__(self, message: str, *, result: dict[str, Any], remaining: list[dict[str, Any]], **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+        self.result = result
+        self.remaining = remaining
+
+
 def error_from_status(
     status: int,
     body: dict[str, Any] | None,
@@ -178,6 +210,8 @@ def error_from_status(
         return PermissionError_(message, **kwargs)
     if status == 404:
         return NotFoundError(message, **kwargs)
+    if status == 409:
+        return ConflictError(message, **kwargs)
     if status == 429:
         return RateLimitError(message, retry_after=retry_after, **kwargs)
     if status >= 500:

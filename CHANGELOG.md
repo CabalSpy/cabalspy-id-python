@@ -4,6 +4,59 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-10-28
+
+White-label: a platform keeps its own login, imports its users (by its own user id,
+`external_id`) with the wallets they already have, and uses their trades, PnL, leaderboards
+and trading competitions through the Data API. Sync and async.
+
+### Added
+
+- Platform users (`/v1/platform-users/*`) on `CabalSpyID` and `AsyncCabalSpyID`:
+  `upsert_platform_user`, `import_platform_users`, `platform_user`, `update_platform_user`,
+  `platform_users` / `iter_platform_users`, `delete_platform_user`, `add_platform_user_wallets`,
+  `delete_platform_user_wallet`, `start_wallet_verification`, `wallet_verification`,
+  `wallet_verification_qr` (SVG), `cancel_wallet_verification`, `platform_user_profile`,
+  `platform_leaderboard` / `iter_platform_leaderboard`, `platform_settings`,
+  `update_platform_settings`, `platform_inbound`, `enable_platform_inbound`,
+  `disable_platform_inbound`, `platform_user_session`, `platform_user_claim_link`,
+  `connect_platform_user_x`, `disconnect_platform_user_x`, `link_platform_user_telegram`,
+  `platform_user_telegram`, `unlink_platform_user_telegram`, `platform_user_kol`,
+  `request_platform_user_volume_check`, `apply_platform_user_kol`. Methods that take a user
+  accept `external_id` or `csid_id=`.
+- `bulk_import_platform_users(users)`: any number of users in chunks of at most 1,000 and under
+  the 1 MB body limit, aggregated results in input order. Retries a chunk refused with 429
+  (`Retry-After` wins) and re-sends only the users rejected with `rate_limited` once the
+  minute is over; a chunk that succeeded is never sent again. Other failures raise
+  `PlatformImportError` with `result` and `remaining` (to resume).
+- Trading competitions (`/v1/competitions*`): `create_competition`, `competitions` /
+  `iter_competitions`, `competition`, `update_competition`, `cancel_competition`,
+  `join_competition`, `leave_competition`, `competition_participants` /
+  `iter_competition_participants`, `competition_standings` / `iter_competition_standings`.
+  The offset-paginated routes are walked with the new `offset_items()`.
+- `get_text()` for non-JSON answers (the verification QR code).
+- `ConflictError` (409): `account_claimed`, `last_wallet`, `too_many_wallets`,
+  `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`,
+  `competition_closed`, `competition_full`, `late_join_closed`. It subclasses
+  `CabalSpyIDError`, which 409 responses raised before.
+- New codes on the existing classes: `wallet_required`, `invalid_address`, `invalid_return_url`
+  (`BadRequestError`), `claim_disabled` (`PermissionError`), `plan_user_limit` on creating a
+  user (`PlanUserLimitError`, `body` has `user_limit`), `platform_user_not_found`,
+  `verification_not_found`, `competition_not_found` (`NotFoundError`), `rate_limited` and
+  `too_many_open_verifications` (`RateLimitError`).
+- Webhook events `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`,
+  `wallet.added`, `verification.expired`, `competition.started`, `competition.updated`,
+  `competition.standings`, `competition.ended` in `WEBHOOK_EVENTS`, plus
+  `PLATFORM_WEBHOOK_EVENTS` and `COMPETITION_WEBHOOK_EVENTS`.
+- Types: `PlatformUser`, `PlatformUserUpsert`, `PlatformWallet`, `PlatformUserInput`,
+  `PlatformWalletInput`, `PlatformImportResult`, `PlatformBulkImportResult`, `PlatformSettings`,
+  `PlatformUserProfile`, `PlatformLeaderboardEntry`, `WalletVerification`, `Competition`,
+  `CompetitionDetail`, `CompetitionStanding`, `CompetitionStandings` and more; constants
+  `PLATFORM_IMPORT_MAX`, `PLATFORM_MAX_WALLETS_PER_REQUEST`, `MAX_REQUEST_BODY_BYTES`,
+  `WALLET_TRUST`, `DATA_SCOPES`, `INBOUND_FORMATS`, `COMPETITION_METRICS`,
+  `COMPETITION_STATUSES`, `COMPETITION_ENROLLMENTS`, `MAX_OPEN_COMPETITIONS`.
+- README section "White-label (platform users)" and `examples/white_label.py`.
+
 ## [0.5.2] - 2026-10-15
 
 The public thesis API (`https://id.cabalspy.xyz/thesis/v1/...`) and its live socket
@@ -121,6 +174,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.6.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.4.1...v0.5.0

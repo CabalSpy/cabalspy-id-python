@@ -13,7 +13,21 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
-from ._constants import Chain, Currency, LeaderboardSort, Period, Scope
+from ._constants import (
+    Chain,
+    CompetitionEnrollment,
+    CompetitionMetric,
+    CompetitionStatus,
+    Currency,
+    DataScope,
+    LeaderboardSort,
+    Period,
+    PlatformImportStatus,
+    PlatformWalletStatus,
+    Scope,
+    VerificationStatus,
+    WalletTrust,
+)
 
 # ── envelope ─────────────────────────────────────────────────────────────────
 
@@ -564,7 +578,10 @@ class WebhookEvent(TypedDict):
     type: str
     created_at: str
     sandbox: bool
-    #: Always carries "sub" (the user's CabalSpy ID), except for webhook.test.
+    #: Carries "sub" (the user's CabalSpy ID), except for webhook.test and the
+    #: instance-level competition.* events (those carry "competition_id").
+    #: Events about one of your platform users (white-label) also carry
+    #: "external_id" (your own user id) and "csid_id".
     data: dict[str, Any]
 
 
@@ -708,3 +725,486 @@ class ThesisNotices(TypedDict):
 class ThesisReactions(TypedDict):
     id: str
     reactions: dict[str, int]
+
+
+# ── white-label: platform users ──────────────────────────────────────────────
+# A platform that keeps its own login manages its users by its own user id
+# (``external_id``). Responses below come from /v1/platform-users/*.
+
+
+class PlatformWalletInput(TypedDict, total=False):
+    """A wallet you submit for a platform user (no payment verification).
+
+    Plain address strings work too. Default ``chains``: solana for a Solana
+    address, every enabled EVM chain for an EVM address.
+    """
+
+    address: str
+    chains: list[Chain]
+    #: Where the wallet comes from, e.g. "privy" (1-40 characters a-z 0-9 _ . -).
+    source: str
+
+
+class PlatformUserInput(TypedDict, total=False):
+    """One user of an import. ``external_id`` always, ``wallets`` for new users."""
+
+    #: Your own user id: 1-128 printable ASCII characters, no spaces.
+    external_id: str
+    #: 1-10 wallets (objects or plain address strings).
+    wallets: list[PlatformWalletInput | str]
+    #: 1-60 characters, or None to clear.
+    display_name: str | None
+    #: An https URL (max 500 characters), or None to clear.
+    avatar_url: str | None
+
+
+class PlatformWallet(TypedDict):
+    address: str
+    #: "solana" or "evm".
+    family: str
+    chains: list[Chain]
+    #: Payment-verified on at least one chain.
+    verified: bool
+    verified_chains: list[Chain]
+    status: PlatformWalletStatus
+    #: Whether the wallet counts for tracking, data and leaderboards.
+    counts: bool
+    source: str | None
+    verified_at: str | None
+    added_at: str | None
+
+
+class WalletAdded(TypedDict):
+    """A wallet (or new chains of it) added by the platform."""
+
+    address: str
+    family: str
+    chains: list[Chain]
+    source: str | None
+
+
+class WalletVerification(TypedDict):
+    """A payment verification of a wallet, started by the platform."""
+
+    verification_id: str
+    status: VerificationStatus
+    chain: Chain
+    chain_name: str
+    address: str
+    #: Amount to send, formatted in the chain's currency.
+    amount: str
+    #: Amount in base units (lamports / wei), as a string.
+    amount_base: str
+    currency: str
+    decimals: int
+    receiver: str
+    expires_at: str
+    seconds_left: int
+    #: solana:... or ethereum:...@chainId URI for wallets and QR codes.
+    payment_uri: str
+    evm_chain_id: int | None
+    instructions: str
+    tx_hash: str | None
+    explorer_url: str | None
+    created_at: str | None
+
+
+class PlatformWalletVerification(WalletVerification):
+    """The verification endpoints' answer: the verification plus whose it is."""
+
+    external_id: str
+
+
+class PlatformUserX(TypedDict):
+    id: str
+    username: str
+    name: str | None
+    avatar_url: str | None
+    followers: int | None
+    following: int | None
+    verified: bool | None
+    verified_type: str | None
+    created_at: str | None
+    url: str
+
+
+class PlatformUserTelegram(TypedDict):
+    username: str | None
+    name: str | None
+    linked_at: str | None
+
+
+class PlatformUser(TypedDict):
+    """One platform user (no trading data; see :class:`PlatformUserProfile`)."""
+
+    csid_id: str
+    external_id: str
+    #: True once the person took the account into their own CabalSpy ID (claim link).
+    claimed: bool
+    claimed_at: str | None
+    managed: bool
+    display_name: str | None
+    avatar_url: str | None
+    #: Beyond the plan's user limit: no data until the platform upgrades.
+    limited: bool
+    x: PlatformUserX | None
+    telegram: PlatformUserTelegram | None
+    kol: KolBadge
+    wallets: list[PlatformWallet]
+    pending_verifications: list[WalletVerification]
+    created_at: str | None
+
+
+class PlatformUserUpsert(PlatformUser):
+    """POST /v1/platform-users: the user plus what this call changed."""
+
+    created: bool
+    wallets_added: list[WalletAdded]
+
+
+class PlatformWalletsResponse(TypedDict):
+    external_id: str
+    wallets_added: list[WalletAdded]
+    wallets: list[PlatformWallet]
+
+
+class PlatformItemError(TypedDict):
+    code: str
+    message: str
+
+
+class PlatformImportItem(TypedDict, total=False):
+    external_id: str | None
+    #: Absent for rejected items.
+    csid_id: str
+    status: PlatformImportStatus
+    wallets_added: list[WalletAdded]
+    #: Only for rejected items (plan_user_limit, wallet_required, rate_limited, ...).
+    error: PlatformItemError
+
+
+class PlatformImportSummary(TypedDict):
+    created: int
+    updated: int
+    unchanged: int
+    rejected: int
+
+
+class PlatformImportResult(TypedDict):
+    summary: PlatformImportSummary
+    #: One result per submitted user, in the same order.
+    results: list[PlatformImportItem]
+
+
+class PlatformBulkImportResult(PlatformImportResult):
+    """The aggregated result of ``bulk_import_platform_users``."""
+
+    #: Import calls made (chunks plus retries).
+    requests: int
+
+
+class PlatformUserDeleted(TypedDict):
+    external_id: str
+    #: False for claimed users: only the link to your platform goes.
+    deleted: bool
+    unlinked: bool
+
+
+class PlatformWalletRemoved(TypedDict):
+    external_id: str
+    address: str
+    removed: bool
+
+
+class PlatformInbound(TypedDict):
+    enabled: bool
+    last_event_at: str | None
+
+
+class PlatformInboundStatus(PlatformInbound):
+    #: Payload formats the inbound URL understands (csid, privy, dynamic, generic).
+    formats: list[str]
+
+
+class PlatformInboundEnabled(TypedDict):
+    enabled: bool
+    #: The secret inbound URL. Shown once; enabling again replaces it.
+    url: str
+    note: str
+
+
+class PlatformSettings(TypedDict):
+    name: str
+    white_label: bool | None
+    data_scope: DataScope
+    #: The same as data_scope == "csid".
+    network_sharing: bool
+    wallet_trust: WalletTrust
+    leaderboard_trust: WalletTrust
+    claim_links: bool | None
+    telegram_alerts: bool | None
+    inbound: PlatformInbound
+
+
+class PlatformSession(TypedDict):
+    external_id: str
+    client_id: str
+    #: pvs_... token for the embeddable verify widget.
+    session: str
+    expires_at: str
+    expires_in: int
+
+
+class PlatformClaimLink(TypedDict):
+    external_id: str
+    url: str
+    expires_at: str
+
+
+class PlatformXConnect(TypedDict):
+    external_id: str
+    #: Send the user here to connect X; they come back to ``return_url``.
+    authorize_url: str
+    expires_at: str
+
+
+class PlatformXDisconnect(TypedDict):
+    external_id: str
+    disconnected: bool
+
+
+class PlatformTelegramLink(TypedDict):
+    external_id: str
+    code: str
+    #: t.me deep link that links the user's Telegram.
+    deep_link: str
+    expires_at: str | None
+
+
+class PlatformTelegramStatus(TypedDict):
+    external_id: str
+    linked: bool
+    username: str | None
+    linked_at: str | None
+
+
+class KolApplicationStatus(TypedDict):
+    status: str
+    applied_at: str | None
+    reviewed_at: str | None
+
+
+class PlatformKolStatus(TypedDict):
+    external_id: str
+    badge: bool
+    eligible: bool
+    criteria: list[dict[str, Any]]
+    volume_7d_usd: float | None
+    volume_check_next_at: str | None
+    application: KolApplicationStatus | None
+
+
+class PlatformKolVolumeCheck(TypedDict):
+    external_id: str
+    queued: bool
+
+
+class PlatformKolApply(TypedDict):
+    external_id: str
+    application: Literal["pending"]
+
+
+class PlatformTradingWallet(TypedDict, total=False):
+    """Period stats of one wallet (the leaderboard ``period_stats`` fields plus these)."""
+
+    address: str
+    verified: bool
+    win_rate_percentage: float
+    total_volume_usd: float
+    realized_pnl_usd: float
+    total_txn: int
+
+
+class PlatformTrading(TypedDict):
+    """A user's trading on one chain, summed over their wallets that count."""
+
+    blockchain: Chain
+    currency: Currency
+    period: Period
+    total_buy: float
+    total_buy_usd: float
+    total_sell: float
+    total_sell_usd: float
+    total_volume: float
+    total_volume_usd: float
+    realized_pnl: float
+    realized_pnl_usd: float
+    total_txn: int
+    buy_txn: int
+    sell_txn: int
+    win_count: int
+    closed_count: int
+    win_rate_percentage: float
+    tokens: int
+    wallets: list[PlatformTradingWallet]
+
+
+class PlatformProfileLinks(TypedDict):
+    blockchain: Chain
+    address: str
+    tracker: str
+    history: str
+    holdings: str
+    pnl_calendar: str
+
+
+class PlatformUserProfile(PlatformUser):
+    """GET /v1/platform-users/profile: everything for a profile page in one call.
+
+    ``kol`` additionally carries ``application`` ({status, applied_at, note} or None).
+    """
+
+    period: Period
+    trading: list[PlatformTrading]
+    #: Newest 20 trades (the :class:`Trade` fields without ``trader``).
+    recent_trades: list[dict[str, Any]]
+    #: {"total": int, "latest": [Thesis, ...]}
+    theses: dict[str, Any]
+    #: {"traders": int, "in_trade_feeds": int}
+    trade_feed: dict[str, int]
+    links: list[PlatformProfileLinks]
+
+
+class PlatformLeaderboardEntry(LeaderboardEntry):
+    external_id: str | None
+    #: The wallet is payment-verified on this chain.
+    verified: bool
+
+
+class PlatformLeaderboardResponse(TypedDict):
+    """GET /v1/platform-users/leaderboard. Pagination is in the envelope."""
+
+    blockchain: Chain
+    period: Period
+    sort: LeaderboardSort
+    currency: Currency
+    #: "verified" when only payment-verified wallets are ranked.
+    trust: Literal["all", "verified"]
+    leaderboard: list[PlatformLeaderboardEntry]
+
+
+class InboundEventResult(TypedDict, total=False):
+    """What the inbound URL answers to a sign-up event."""
+
+    accepted: bool
+    #: created | updated | deleted | wallets_removed | ignored | unknown_user | waiting_for_wallet
+    result: str
+    external_id: str
+    csid_id: str
+    wallets_added: list[WalletAdded]
+    #: wallets_removed: the addresses removed, and {address, code} for each one kept
+    wallets_removed: list[str]
+    wallets_not_removed: list[dict[str, str]]
+    #: ignored: why (wallet removals from auth providers are not applied)
+    note: str
+    error: PlatformItemError
+
+
+# ── trading competitions ─────────────────────────────────────────────────────
+
+
+class CompetitionChange(TypedDict):
+    rules_version: int
+    changed_at: str | None
+    #: The phase the change happened in (scheduled, running).
+    during: str
+    #: {field: {"from": old, "to": new}}
+    changes: dict[str, dict[str, Any]]
+    note: str | None
+
+
+class Competition(TypedDict):
+    """A competition as listed (GET /v1/competitions)."""
+
+    id: str
+    name: str
+    description: str | None
+    chain: Chain
+    chain_name: str
+    metric: CompetitionMetric
+    wallet_trust: WalletTrust
+    enrollment: CompetitionEnrollment
+    status: CompetitionStatus
+    starts_at: str | None
+    duration_hours: float
+    started_at: str | None
+    ends_at: str | None
+    ended_at: str | None
+    min_participants: int
+    max_participants: int | None
+    participants: int
+    min_trades: int
+    min_volume_usd: float
+    late_join: bool
+    prizes: Any
+    rules_version: int
+    standings_updated_at: str | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class CompetitionDetail(Competition):
+    """Create, detail and update: the competition plus every rule change."""
+
+    changes: list[CompetitionChange]
+    changed_while_running: bool
+
+
+class CompetitionParticipant(TypedDict):
+    external_id: str | None
+    csid_id: str
+    joined_at: str | None
+
+
+class CompetitionStanding(TypedDict, total=False):
+    """One trader. Unranked traders (below the minimums) have ``rank`` None."""
+
+    rank: int | None
+    ranked: bool
+    external_id: str | None
+    csid_id: str
+    #: The value of the competition's metric.
+    score: float
+    pnl: float
+    pnl_usd: float
+    volume: float
+    volume_usd: float
+    trades: int
+    buys: int
+    sells: int
+    win_count: int
+    closed_count: int
+    win_rate: float
+    tokens: int
+    wallets: int
+
+
+class CompetitionStandings(TypedDict):
+    competition_id: str
+    status: CompetitionStatus
+    metric: CompetitionMetric
+    rules_version: int
+    updated_at: str | None
+    #: True once the competition ended: these are the results.
+    final: bool
+    standings: list[CompetitionStanding]
+
+
+class CompetitionMembership(TypedDict, total=False):
+    competition_id: str
+    external_id: str
+    #: join: True; ``already`` says whether the user was in before.
+    joined: bool
+    already: bool
+    #: leave: whether the user was a participant.
+    left: bool

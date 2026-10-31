@@ -12,28 +12,42 @@ https://apidashboard.cabalspy.xyz.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import httpx
 
 from ._constants import (
     CHAINS,
+    COMPETITION_ENROLLMENTS,
+    COMPETITION_METRICS,
+    COMPETITION_STATUSES,
+    DATA_SCOPES,
     DEFAULT_BASE_URL,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
     LEADERBOARD_SORTS,
     PERIODS,
+    PLATFORM_IMPORT_MAX,
+    PLATFORM_MAX_WALLETS_PER_REQUEST,
     SCOPES,
     THESIS_EMOJIS,
     THESIS_REPORT_REASONS,
     THESIS_SCOPES,
     USER_AGENT,
+    WALLET_TRUST,
     Chain,
+    CompetitionEnrollment,
+    CompetitionMetric,
+    CompetitionStatus,
+    DataScope,
     LeaderboardSort,
+    LeaderboardTrust,
     Period,
     Scope,
     StreamTopic,
@@ -42,6 +56,7 @@ from ._constants import (
     ThesisScope,
     ThesisSort,
     ThesisStance,
+    WalletTrust,
 )
 from ._errors import (
     APIConnectionError,
@@ -49,15 +64,19 @@ from ._errors import (
     BadRequestError,
     CabalSpyIDError,
     InvalidResponseError,
+    PlatformImportError,
     RateLimit,
     RateLimitError,
     error_from_status,
     is_retryable,
 )
+from ._types import PlatformBulkImportResult, PlatformUserInput, PlatformWalletInput
 
 if TYPE_CHECKING:
     from ._stream import CabalSpyIDStream
     from ._theses_stream import ThesesStream
+
+_T = TypeVar("_T")
 
 __all__ = ["CabalSpyID", "AsyncCabalSpyID", "Envelope"]
 
@@ -174,6 +193,161 @@ def _page_pagination(page: Envelope) -> dict[str, Any] | None:
     return page.pagination or inner
 
 
+# ── white-label helpers ──────────────────────────────────────────────────────
+
+
+class _NotGiven:
+    """Sentinel for "not passed", where ``None`` means "clear the value"."""
+
+    def __repr__(self) -> str:
+        return "NOT_GIVEN"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+NOT_GIVEN: Any = _NotGiven()
+
+_IMPORT_PATH = "/platform-users/import"
+#: Bulk imports keep each request body below this (the server takes up to 1 MB).
+_IMPORT_BODY_BYTES = 900_000
+
+
+def _given(**fields: Any) -> dict[str, Any]:
+    return {k: v for k, v in fields.items() if not isinstance(v, _NotGiven)}
+
+
+def _who(external_id: str | None, csid_id: str | None) -> dict[str, Any]:
+    """The user of a platform-users call: exactly one of external_id, csid_id."""
+    if bool(external_id) == bool(csid_id):
+        raise BadRequestError(
+            "Pass exactly one of: external_id, csid_id.", code="missing_parameter", parameter="external_id|csid_id"
+        )
+    return {"external_id": external_id} if external_id else {"csid_id": csid_id}
+
+
+def _wallet_items(wallets: Any, *, required: bool = True) -> list[Any]:
+    if isinstance(wallets, (str, Mapping)):
+        raise BadRequestError("wallets must be a list of wallets.", code="invalid_parameter", parameter="wallets")
+    items = [w if isinstance(w, str) else dict(w) for w in wallets]
+    if required and not items:
+        raise BadRequestError(
+            'Pass at least one wallet: wallets=[{"address": "..."}].', code="wallet_required", parameter="wallets"
+        )
+    if len(items) > PLATFORM_MAX_WALLETS_PER_REQUEST:
+        raise BadRequestError(
+            f"At most {PLATFORM_MAX_WALLETS_PER_REQUEST} wallets per request.",
+            code="invalid_parameter",
+            parameter="wallets",
+        )
+    return items
+
+
+def _platform_leaderboard_query(
+    blockchain: Any, period: Any, sort: Any, trust: Any, limit: Any, cursor: Any
+) -> dict[str, Any]:
+    _required(blockchain, "blockchain")
+    _one_of(blockchain, CHAINS, "blockchain")
+    _one_of(period, PERIODS, "period")
+    _one_of(sort, LEADERBOARD_SORTS, "sort")
+    _one_of(trust, ("all", "verified"), "trust")
+    return {"blockchain": blockchain, "period": period, "sort": sort, "trust": trust, "limit": limit, "cursor": cursor}
+
+
+def _competition_fields(**fields: Any) -> dict[str, Any]:
+    out = _given(**fields)
+    _one_of(out.get("chain"), CHAINS, "chain")
+    _one_of(out.get("metric"), COMPETITION_METRICS, "metric")
+    _one_of(out.get("wallet_trust"), WALLET_TRUST, "wallet_trust")
+    _one_of(out.get("enrollment"), COMPETITION_ENROLLMENTS, "enrollment")
+    if isinstance(out.get("starts_at"), datetime):
+        out["starts_at"] = out["starts_at"].isoformat()
+    return out
+
+
+def _import_items(users: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(users, (str, Mapping)):
+        raise BadRequestError("users must be a list of users.", code="invalid_parameter", parameter="users")
+    return [dict(u) for u in users]
+
+
+def _import_wait() -> float:
+    """Seconds until the server's per-minute window for new users resets (UTC minutes), plus 1."""
+    return 61.0 - time.time() % 60.0
+
+
+class _ImportRun:
+    """State of one bulk import: the users, their chunks and the results so far."""
+
+    def __init__(self, users: Iterable[Mapping[str, Any]], chunk_size: int, max_body_bytes: int, attempts: int):
+        if not 1 <= chunk_size <= PLATFORM_IMPORT_MAX:
+            raise ValueError(f"chunk_size must be 1-{PLATFORM_IMPORT_MAX}")
+        if attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        self.items = _import_items(users)
+        self.results: list[dict[str, Any] | None] = [None] * len(self.items)
+        self.requests = 0
+        self.chunks: list[list[int]] = []
+        current: list[int] = []
+        size = len('{"users": []}')
+        for i, item in enumerate(self.items):
+            # json.dumps' defaults (ASCII escapes, spaced separators) never encode smaller than httpx
+            n = len(json.dumps(item).encode()) + 2
+            if current and (len(current) >= chunk_size or size + n > max_body_bytes):
+                self.chunks.append(current)
+                current, size = [], len('{"users": []}')
+            current.append(i)
+            size += n
+        if current:
+            self.chunks.append(current)
+
+    def body(self, pending: list[int]) -> dict[str, Any]:
+        self.requests += 1
+        return {"users": [self.items[i] for i in pending]}
+
+    def record(self, sent: list[int], data: Any) -> list[int]:
+        """Stores the results of one call; returns the users rejected with rate_limited."""
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list) or len(results) != len(sent):
+            raise InvalidResponseError(
+                f"Unexpected import response: {len(sent)} users sent, results do not match",
+                code="invalid_response",
+            )
+        retry: list[int] = []
+        for index, res in zip(sent, results, strict=True):
+            self.results[index] = res
+            error = res.get("error") if isinstance(res, dict) else None
+            if isinstance(error, dict) and error.get("code") == "rate_limited":
+                retry.append(index)
+        return retry
+
+    def result(self, skip: Iterable[int] = ()) -> dict[str, Any]:
+        skipped = set(skip)
+        results = [r for i, r in enumerate(self.results) if r is not None and i not in skipped]
+        summary = {"created": 0, "updated": 0, "unchanged": 0, "rejected": 0}
+        for r in results:
+            status = r.get("status")
+            if status in summary:
+                summary[status] += 1
+        return {"summary": summary, "results": results, "requests": self.requests}
+
+    def failed(self, exc: CabalSpyIDError, chunk_no: int, pending: list[int]) -> PlatformImportError:
+        left = pending + [i for chunk in self.chunks[chunk_no + 1 :] for i in chunk]
+        return PlatformImportError(
+            f"Import stopped, {len(left)} of {len(self.items)} users not imported: {exc}",
+            result=self.result(left),
+            remaining=[self.items[i] for i in left],
+            status=exc.status,
+            code=exc.code,
+            request_id=exc.request_id,
+            docs=exc.docs,
+            parameter=exc.parameter,
+            allowed=exc.allowed,
+            rate_limit=exc.rate_limit,
+            body=exc.body,
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  ENDPOINTS  (shared between the sync and async clients)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -184,6 +358,9 @@ class _Endpoints:
         raise NotImplementedError
 
     def _post(self, path: str, body: Mapping[str, Any]) -> Any:  # pragma: no cover
+        raise NotImplementedError
+
+    def _get_text(self, path: str, params: Mapping[str, Any] | None = None) -> Any:  # pragma: no cover
         raise NotImplementedError
 
     # ── account ──────────────────────────────────────────────────────────
@@ -537,6 +714,468 @@ class _Endpoints:
         _required(csid_id, "csid_id")
         return self._post("/theses/delete", {"thesis_id": thesis_id, "csid_id": csid_id})
 
+    # ── white-label: platform users ──────────────────────────────────────
+    # Your platform keeps its own login and addresses its users by its own user
+    # id (``external_id``). Every method that takes a user accepts either
+    # ``external_id`` (positional) or ``csid_id=`` — exactly one.
+
+    def upsert_platform_user(
+        self,
+        external_id: str,
+        *,
+        wallets: Sequence[PlatformWalletInput | str] | None = None,
+        display_name: str | _NotGiven | None = NOT_GIVEN,
+        avatar_url: str | _NotGiven | None = NOT_GIVEN,
+    ) -> Any:
+        """POST /v1/platform-users — creates the user or updates an existing one.
+
+        A new user needs 1-10 ``wallets`` (objects or plain addresses) and a free
+        place in your plan (else :class:`~cabalspy_id.PlanUserLimitError`). For an
+        existing user, wallets are added and the profile fields you pass are set
+        (``None`` clears them). Returns :class:`~cabalspy_id.PlatformUserUpsert`
+        (``created`` says which happened).
+        """
+        _required(external_id, "external_id")
+        body: dict[str, Any] = {"external_id": external_id}
+        if wallets is not None:
+            body["wallets"] = _wallet_items(wallets, required=False)
+        body.update(_given(display_name=display_name, avatar_url=avatar_url))
+        return self._post("/platform-users", body)
+
+    def import_platform_users(self, users: Iterable[PlatformUserInput]) -> Any:
+        """POST /v1/platform-users/import — creates or updates up to 1,000 users in one call.
+
+        Each user is handled on its own: a bad item or the plan limit never undoes
+        the others. Returns :class:`~cabalspy_id.PlatformImportResult` (one result
+        per user, in order). For more users, or automatic retries, use
+        ``bulk_import_platform_users``.
+        """
+        items = _import_items(users)
+        if not items:
+            raise BadRequestError("Pass at least one user.", code="missing_parameter", parameter="users")
+        if len(items) > PLATFORM_IMPORT_MAX:
+            raise BadRequestError(
+                f"At most {PLATFORM_IMPORT_MAX} users per import call; use bulk_import_platform_users().",
+                code="invalid_parameter",
+                parameter="users",
+            )
+        return self._post(_IMPORT_PATH, {"users": items})
+
+    def platform_user(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """GET /v1/platform-users — one of your users. Returns :class:`~cabalspy_id.PlatformUser`."""
+        return self._get("/platform-users", _who(external_id, csid_id))
+
+    def update_platform_user(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        display_name: str | _NotGiven | None = NOT_GIVEN,
+        avatar_url: str | _NotGiven | None = NOT_GIVEN,
+    ) -> Any:
+        """POST /v1/platform-users/update — sets ``display_name`` and/or ``avatar_url`` (``None`` clears).
+
+        Returns :class:`~cabalspy_id.PlatformUser`.
+        """
+        fields = _given(display_name=display_name, avatar_url=avatar_url)
+        if not fields:
+            raise BadRequestError(
+                "Pass display_name and/or avatar_url.", code="missing_parameter", parameter="display_name"
+            )
+        return self._post("/platform-users/update", {**_who(external_id, csid_id), **fields})
+
+    def platform_users(self, *, limit: int | None = None, cursor: str | None = None) -> Any:
+        """GET /v1/platform-users/list — your users, newest first (``limit`` 1-100, default 50).
+
+        Returns a list of :class:`~cabalspy_id.PlatformUser`; see ``iter_platform_users``.
+        """
+        return self._get("/platform-users/list", {"limit": limit, "cursor": cursor})
+
+    def delete_platform_user(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/delete — deletes the user and their data.
+
+        A claimed user keeps their CabalSpy ID: only the link to your platform goes
+        (``deleted`` False, ``unlinked`` True). Returns :class:`~cabalspy_id.PlatformUserDeleted`.
+        """
+        return self._post("/platform-users/delete", _who(external_id, csid_id))
+
+    def add_platform_user_wallets(
+        self,
+        external_id: str | None = None,
+        *,
+        wallets: Sequence[PlatformWalletInput | str],
+        csid_id: str | None = None,
+    ) -> Any:
+        """POST /v1/platform-users/wallets/add — adds 1-10 existing wallets (no payment verification).
+
+        Returns :class:`~cabalspy_id.PlatformWalletsResponse`.
+        """
+        return self._post(
+            "/platform-users/wallets/add", {**_who(external_id, csid_id), "wallets": _wallet_items(wallets)}
+        )
+
+    def delete_platform_user_wallet(
+        self, external_id: str | None = None, *, address: str, csid_id: str | None = None
+    ) -> Any:
+        """POST /v1/platform-users/wallets/delete — removes a wallet. The last one cannot go
+        (:class:`~cabalspy_id.ConflictError` ``last_wallet``). Returns :class:`~cabalspy_id.PlatformWalletRemoved`.
+        """
+        _required(address, "address")
+        return self._post("/platform-users/wallets/delete", {**_who(external_id, csid_id), "address": address})
+
+    def start_wallet_verification(
+        self, external_id: str | None = None, *, chain: Chain, address: str, csid_id: str | None = None
+    ) -> Any:
+        """POST /v1/platform-users/wallets/verify — starts the payment verification of a wallet.
+
+        The user sends the exact ``amount`` from that wallet to ``receiver`` before
+        ``expires_at`` (``payment_uri`` for wallets and QR codes). Returns
+        :class:`~cabalspy_id.PlatformWalletVerification`.
+        """
+        _required(chain, "chain")
+        _one_of(chain, CHAINS, "chain")
+        _required(address, "address")
+        return self._post(
+            "/platform-users/wallets/verify", {**_who(external_id, csid_id), "chain": chain, "address": address}
+        )
+
+    def wallet_verification(self, id: str) -> Any:
+        """GET /v1/platform-users/wallets/verification — status of a verification
+        (pending, verified, cancelled, expired). Returns :class:`~cabalspy_id.PlatformWalletVerification`.
+        """
+        _required(id, "id")
+        return self._get("/platform-users/wallets/verification", {"id": id})
+
+    def wallet_verification_qr(self, id: str) -> Any:
+        """GET /v1/platform-users/wallets/verification/qr — the payment URI as a QR code (SVG text)."""
+        _required(id, "id")
+        return self._get_text("/platform-users/wallets/verification/qr", {"id": id})
+
+    def cancel_wallet_verification(self, id: str) -> Any:
+        """POST /v1/platform-users/wallets/verification/cancel.
+
+        Returns :class:`~cabalspy_id.PlatformWalletVerification`.
+        """
+        _required(id, "id")
+        return self._post("/platform-users/wallets/verification/cancel", {"id": id})
+
+    def platform_user_profile(
+        self, external_id: str | None = None, *, csid_id: str | None = None, period: Period | None = None
+    ) -> Any:
+        """GET /v1/platform-users/profile — everything for a profile page in one call: the user,
+        trading per chain (default period 7d), recent trades, theses, Trade Feed and KOL status.
+
+        Returns :class:`~cabalspy_id.PlatformUserProfile`.
+        """
+        _one_of(period, PERIODS, "period")
+        return self._get("/platform-users/profile", {**_who(external_id, csid_id), "period": period})
+
+    def platform_leaderboard(
+        self,
+        *,
+        blockchain: Chain,
+        period: Period | None = None,
+        sort: LeaderboardSort | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        trust: LeaderboardTrust | None = None,
+    ) -> Any:
+        """GET /v1/platform-users/leaderboard — your platform users ranked (default 7d, pnl_usd;
+        ``limit`` 1-500, default 100), each entry with ``external_id`` and ``verified``.
+
+        ``trust="verified"`` ranks only payment-verified wallets; it can only narrow the
+        instance's ``leaderboard_trust``. Returns :class:`~cabalspy_id.PlatformLeaderboardResponse`;
+        see ``iter_platform_leaderboard``.
+        """
+        return self._get(
+            "/platform-users/leaderboard", _platform_leaderboard_query(blockchain, period, sort, trust, limit, cursor)
+        )
+
+    def platform_settings(self) -> Any:
+        """GET /v1/platform-users/settings. Returns :class:`~cabalspy_id.PlatformSettings`."""
+        return self._get("/platform-users/settings")
+
+    def update_platform_settings(
+        self,
+        *,
+        white_label: bool | None = None,
+        data_scope: DataScope | None = None,
+        wallet_trust: WalletTrust | None = None,
+        leaderboard_trust: WalletTrust | None = None,
+        claim_links: bool | None = None,
+        telegram_alerts: bool | None = None,
+    ) -> Any:
+        """POST /v1/platform-users/settings — changes the settings you pass (None = unchanged).
+
+        ``data_scope``: ``csid`` (part of the CabalSpy ID network) or ``platform`` (only you
+        see your users). ``wallet_trust`` / ``leaderboard_trust``: ``all`` or ``verified_only``.
+        Returns :class:`~cabalspy_id.PlatformSettings`.
+        """
+        _one_of(data_scope, DATA_SCOPES, "data_scope")
+        _one_of(wallet_trust, WALLET_TRUST, "wallet_trust")
+        _one_of(leaderboard_trust, WALLET_TRUST, "leaderboard_trust")
+        changes = {
+            k: v
+            for k, v in {
+                "white_label": white_label,
+                "data_scope": data_scope,
+                "wallet_trust": wallet_trust,
+                "leaderboard_trust": leaderboard_trust,
+                "claim_links": claim_links,
+                "telegram_alerts": telegram_alerts,
+            }.items()
+            if v is not None
+        }
+        if not changes:
+            raise BadRequestError("Pass at least one setting.", code="missing_parameter", parameter="settings")
+        return self._post("/platform-users/settings", changes)
+
+    def platform_inbound(self) -> Any:
+        """GET /v1/platform-users/inbound — whether the inbound URL is on, its last event and
+        the payload formats it understands. Returns :class:`~cabalspy_id.PlatformInboundStatus`.
+        """
+        return self._get("/platform-users/inbound")
+
+    def enable_platform_inbound(self) -> Any:
+        """POST /v1/platform-users/inbound/enable — a new secret inbound URL for sign-up events
+        from your platform or its auth provider (Privy, Dynamic, ...). Shown once; calling
+        again replaces it. Returns :class:`~cabalspy_id.PlatformInboundEnabled`.
+        """
+        return self._post("/platform-users/inbound/enable", {})
+
+    def disable_platform_inbound(self) -> Any:
+        """POST /v1/platform-users/inbound/disable. Returns ``{"enabled": False}``."""
+        return self._post("/platform-users/inbound/disable", {})
+
+    def platform_user_session(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/session — a 15-minute token for the embeddable verify widget.
+
+        Returns :class:`~cabalspy_id.PlatformSession`.
+        """
+        return self._post("/platform-users/session", _who(external_id, csid_id))
+
+    def platform_user_claim_link(
+        self, external_id: str | None = None, *, return_url: str | None = None, csid_id: str | None = None
+    ) -> Any:
+        """POST /v1/platform-users/claim-link — a 24-hour link that lets the person take the account
+        into their own CabalSpy ID. ``return_url`` must be on your verified domains or registered
+        origins. Off with ``white_label`` unless ``claim_links`` is on (``claim_disabled``).
+
+        Returns :class:`~cabalspy_id.PlatformClaimLink`.
+        """
+        body = _who(external_id, csid_id)
+        if return_url:
+            body["return_url"] = return_url
+        return self._post("/platform-users/claim-link", body)
+
+    def connect_platform_user_x(
+        self, external_id: str | None = None, *, return_url: str, csid_id: str | None = None
+    ) -> Any:
+        """POST /v1/platform-users/x/connect — a 10-minute ``authorize_url`` that connects the
+        user's X account, then returns to ``return_url``. Returns :class:`~cabalspy_id.PlatformXConnect`.
+        """
+        _required(return_url, "return_url")
+        return self._post("/platform-users/x/connect", {**_who(external_id, csid_id), "return_url": return_url})
+
+    def disconnect_platform_user_x(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/x/disconnect. Not possible with the KOL badge (``kol_badge``).
+
+        Returns :class:`~cabalspy_id.PlatformXDisconnect`.
+        """
+        return self._post("/platform-users/x/disconnect", _who(external_id, csid_id))
+
+    def link_platform_user_telegram(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/telegram/link — a t.me ``deep_link`` that links the user's Telegram.
+
+        Returns :class:`~cabalspy_id.PlatformTelegramLink`.
+        """
+        return self._post("/platform-users/telegram/link", _who(external_id, csid_id))
+
+    def platform_user_telegram(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """GET /v1/platform-users/telegram. Returns :class:`~cabalspy_id.PlatformTelegramStatus`."""
+        return self._get("/platform-users/telegram", _who(external_id, csid_id))
+
+    def unlink_platform_user_telegram(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/telegram/unlink. Returns ``{"external_id", "linked": False}``."""
+        return self._post("/platform-users/telegram/unlink", _who(external_id, csid_id))
+
+    def platform_user_kol(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """GET /v1/platform-users/kol — badge, eligibility criteria, 7-day volume and application.
+
+        Returns :class:`~cabalspy_id.PlatformKolStatus`.
+        """
+        return self._get("/platform-users/kol", _who(external_id, csid_id))
+
+    def request_platform_user_volume_check(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/kol/volume-check — queues an on-chain volume check (202).
+
+        Returns :class:`~cabalspy_id.PlatformKolVolumeCheck`.
+        """
+        return self._post("/platform-users/kol/volume-check", _who(external_id, csid_id))
+
+    def apply_platform_user_kol(self, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/platform-users/kol/apply — applies for the KOL badge (needs X: ``x_required``;
+        ``kol_not_eligible`` lists the criteria in ``body``). Returns :class:`~cabalspy_id.PlatformKolApply`.
+        """
+        return self._post("/platform-users/kol/apply", _who(external_id, csid_id))
+
+    # ── trading competitions ─────────────────────────────────────────────
+    # Between your platform users; at most 5 scheduled + running at a time per account.
+
+    def create_competition(
+        self,
+        *,
+        name: str,
+        chain: Chain,
+        metric: CompetitionMetric,
+        duration_hours: float,
+        starts_at: str | datetime | _NotGiven | None = NOT_GIVEN,
+        min_participants: int | _NotGiven = NOT_GIVEN,
+        max_participants: int | _NotGiven | None = NOT_GIVEN,
+        min_trades: int | _NotGiven = NOT_GIVEN,
+        min_volume_usd: float | _NotGiven = NOT_GIVEN,
+        wallet_trust: WalletTrust | _NotGiven = NOT_GIVEN,
+        enrollment: CompetitionEnrollment | _NotGiven = NOT_GIVEN,
+        late_join: bool | _NotGiven = NOT_GIVEN,
+        prizes: Any = NOT_GIVEN,
+        description: str | _NotGiven | None = NOT_GIVEN,
+    ) -> Any:
+        """POST /v1/competitions — a trading competition between your platform users.
+
+        It starts at ``starts_at`` (or at once) once ``min_participants`` joined, then runs
+        ``duration_hours`` (1-8760). ``enrollment="all_users"`` enters every platform user.
+        Traders below ``min_trades`` / ``min_volume_usd`` are listed but not ranked.
+        Returns :class:`~cabalspy_id.CompetitionDetail`.
+        """
+        _required(name, "name")
+        _required(chain, "chain")
+        _required(metric, "metric")
+        _required(duration_hours, "duration_hours")
+        body = _competition_fields(
+            name=name,
+            chain=chain,
+            metric=metric,
+            duration_hours=duration_hours,
+            starts_at=starts_at,
+            min_participants=min_participants,
+            max_participants=max_participants,
+            min_trades=min_trades,
+            min_volume_usd=min_volume_usd,
+            wallet_trust=wallet_trust,
+            enrollment=enrollment,
+            late_join=late_join,
+            prizes=prizes,
+            description=description,
+        )
+        return self._post("/competitions", body)
+
+    def competitions(
+        self, *, status: CompetitionStatus | None = None, limit: int | None = None, offset: int | None = None
+    ) -> Any:
+        """GET /v1/competitions — your competitions, newest first (``limit`` 1-500, default 50).
+
+        Returns a list of :class:`~cabalspy_id.Competition`; see ``iter_competitions``.
+        """
+        _one_of(status, COMPETITION_STATUSES, "status")
+        return self._get("/competitions", {"status": status, "limit": limit, "offset": offset})
+
+    def competition(self, id: str) -> Any:
+        """GET /v1/competitions/detail — one competition with every rule change.
+
+        Returns :class:`~cabalspy_id.CompetitionDetail`.
+        """
+        _required(id, "id")
+        return self._get("/competitions/detail", {"id": id})
+
+    def update_competition(
+        self,
+        id: str,
+        *,
+        note: str | None = None,
+        name: str | _NotGiven = NOT_GIVEN,
+        chain: Chain | _NotGiven = NOT_GIVEN,
+        metric: CompetitionMetric | _NotGiven = NOT_GIVEN,
+        duration_hours: float | _NotGiven = NOT_GIVEN,
+        starts_at: str | datetime | _NotGiven | None = NOT_GIVEN,
+        min_participants: int | _NotGiven = NOT_GIVEN,
+        max_participants: int | _NotGiven | None = NOT_GIVEN,
+        min_trades: int | _NotGiven = NOT_GIVEN,
+        min_volume_usd: float | _NotGiven = NOT_GIVEN,
+        wallet_trust: WalletTrust | _NotGiven = NOT_GIVEN,
+        enrollment: CompetitionEnrollment | _NotGiven = NOT_GIVEN,
+        late_join: bool | _NotGiven = NOT_GIVEN,
+        prizes: Any = NOT_GIVEN,
+        description: str | _NotGiven | None = NOT_GIVEN,
+    ) -> Any:
+        """POST /v1/competitions/update — changes any rule, at any time (also while running).
+
+        Every change is recorded (``changes``, ``rules_version``) and sent as the webhook
+        ``competition.updated``; ``note`` (max 500 characters) explains it. Pass ``None`` to
+        clear ``starts_at``, ``max_participants``, ``prizes`` or ``description``.
+        Returns :class:`~cabalspy_id.CompetitionDetail`.
+        """
+        _required(id, "id")
+        fields = _competition_fields(
+            name=name,
+            chain=chain,
+            metric=metric,
+            duration_hours=duration_hours,
+            starts_at=starts_at,
+            min_participants=min_participants,
+            max_participants=max_participants,
+            min_trades=min_trades,
+            min_volume_usd=min_volume_usd,
+            wallet_trust=wallet_trust,
+            enrollment=enrollment,
+            late_join=late_join,
+            prizes=prizes,
+            description=description,
+        )
+        if not fields:
+            raise BadRequestError("Pass at least one field to change.", code="missing_parameter", parameter="fields")
+        body: dict[str, Any] = {"id": id, **fields}
+        if note is not None:
+            body["note"] = note
+        return self._post("/competitions/update", body)
+
+    def cancel_competition(self, id: str) -> Any:
+        """POST /v1/competitions/cancel. Returns :class:`~cabalspy_id.CompetitionDetail`."""
+        _required(id, "id")
+        return self._post("/competitions/cancel", {"id": id})
+
+    def join_competition(self, id: str, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/competitions/join — enters one of your users (``already`` True if they were in).
+
+        Returns :class:`~cabalspy_id.CompetitionMembership`.
+        """
+        _required(id, "id")
+        return self._post("/competitions/join", {"id": id, **_who(external_id, csid_id)})
+
+    def leave_competition(self, id: str, external_id: str | None = None, *, csid_id: str | None = None) -> Any:
+        """POST /v1/competitions/leave — removes one of your users (``left`` False if they were not in).
+
+        Returns :class:`~cabalspy_id.CompetitionMembership`.
+        """
+        _required(id, "id")
+        return self._post("/competitions/leave", {"id": id, **_who(external_id, csid_id)})
+
+    def competition_participants(self, id: str, *, limit: int | None = None, offset: int | None = None) -> Any:
+        """GET /v1/competitions/participants — in join order (``limit`` 1-1000, default 100).
+
+        Returns a list of :class:`~cabalspy_id.CompetitionParticipant`.
+        """
+        _required(id, "id")
+        return self._get("/competitions/participants", {"id": id, "limit": limit, "offset": offset})
+
+    def competition_standings(self, id: str, *, limit: int | None = None, offset: int | None = None) -> Any:
+        """GET /v1/competitions/standings — ranked traders first, then the unranked (below the
+        minimums). Updated every 5 minutes; ``final`` once the competition ended.
+
+        Returns :class:`~cabalspy_id.CompetitionStandings`.
+        """
+        _required(id, "id")
+        return self._get("/competitions/standings", {"id": id, "limit": limit, "offset": offset})
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIENTS
@@ -597,14 +1236,24 @@ class _BaseClient(_Endpoints):
         url = f"{self.base_url}{path if path.startswith('/') else '/' + path}"
         return url, query, headers
 
-    def _interpret(self, response: httpx.Response, path: str, method: str = "GET") -> Envelope:
-        """Turns an HTTP response into an Envelope, or raises the right error."""
-        rate_limit = RateLimit(
+    def _rate_limit(self, response: httpx.Response) -> RateLimit:
+        self.last_rate_limit = RateLimit(
             _int_header(response.headers, "X-RateLimit-Limit"),
             _int_header(response.headers, "X-RateLimit-Remaining"),
             _int_header(response.headers, "X-RateLimit-Reset"),
         )
-        self.last_rate_limit = rate_limit
+        return self.last_rate_limit
+
+    def _interpret_text(self, response: httpx.Response, path: str) -> str:
+        """The body of a non-JSON answer (an SVG), or raises the API's error."""
+        if response.status_code >= 400:
+            self._interpret(response, path)
+        self._rate_limit(response)
+        return response.text
+
+    def _interpret(self, response: httpx.Response, path: str, method: str = "GET") -> Envelope:
+        """Turns an HTTP response into an Envelope, or raises the right error."""
+        rate_limit = self._rate_limit(response)
         try:
             parsed: Any = response.json() if response.content else None
         except ValueError:
@@ -705,6 +1354,18 @@ class CabalSpyID(_BaseClient):
 
     def get_raw(self, path: str, params: Mapping[str, Any] | None = None, *, auth: bool = True) -> Envelope:
         """Any GET, returning the full envelope (data, pagination, meta, rate limit)."""
+        return self._send_get(path, params, auth, self._interpret)
+
+    def get_text(self, path: str, params: Mapping[str, Any] | None = None) -> str:
+        """Any GET whose answer is not JSON (the verification QR code), as text."""
+        return self._send_get(path, params, True, self._interpret_text)
+
+    def _get_text(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
+        return self.get_text(path, params)
+
+    def _send_get(
+        self, path: str, params: Mapping[str, Any] | None, auth: bool, parse: Callable[[httpx.Response, str], _T]
+    ) -> _T:
         url, query, headers = self._prepare(path, params, auth)
         last: BaseException | None = None
         for attempt in range(self.max_retries + 1):
@@ -716,7 +1377,7 @@ class CabalSpyID(_BaseClient):
                 last = self._connection_error(exc, path)
                 continue
             try:
-                return self._interpret(response, path)
+                return parse(response, path)
             except CabalSpyIDError as exc:
                 if is_retryable(exc) and attempt < self.max_retries:
                     last = exc
@@ -812,6 +1473,104 @@ class CabalSpyID(_BaseClient):
         for page in self.pages("/theses/replies", {"id": id, "limit": limit, "csid_id": csid_id}):
             yield from page.data
 
+    # ── white-label ──────────────────────────────────────────────────────
+
+    def bulk_import_platform_users(
+        self,
+        users: Iterable[PlatformUserInput],
+        *,
+        chunk_size: int = PLATFORM_IMPORT_MAX,
+        max_attempts: int = 5,
+        max_body_bytes: int = _IMPORT_BODY_BYTES,
+    ) -> PlatformBulkImportResult:
+        """Imports any number of users in chunks of at most ``chunk_size`` (1,000) users and
+        ``max_body_bytes``, and returns the aggregated results in input order.
+
+        A chunk refused with 429 is sent again after a backoff (``Retry-After`` wins).
+        Users the server rejected with ``rate_limited`` (too many new users per minute)
+        are sent again on their own once the minute is over. A chunk that succeeded is
+        never sent again. Each chunk gets ``max_attempts`` rounds (on top of the client's
+        own ``max_retries`` for ``rate_limit_exceeded``); users still rate limited after
+        that stay ``rejected`` in the results.
+
+        Any other error raises :class:`~cabalspy_id.PlatformImportError` with ``result``
+        (what was imported) and ``remaining`` (the users to pass again to resume).
+        """
+        run = _ImportRun(users, chunk_size, max_body_bytes, max_attempts)
+        for chunk_no, chunk in enumerate(run.chunks):
+            pending, attempt = chunk, 0
+            while pending:
+                attempt += 1
+                try:
+                    data = self._post(_IMPORT_PATH, run.body(pending))
+                except RateLimitError as exc:
+                    if attempt >= max_attempts:
+                        raise run.failed(exc, chunk_no, pending) from exc
+                    time.sleep(_backoff(attempt, exc))
+                    continue
+                except CabalSpyIDError as exc:
+                    raise run.failed(exc, chunk_no, pending) from exc
+                pending = run.record(pending, data)
+                if pending and attempt >= max_attempts:
+                    break
+                if pending:
+                    time.sleep(_import_wait())
+        return run.result()  # type: ignore[return-value]
+
+    def iter_platform_users(self, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Every platform user of your instance, newest first, following ``next_cursor``."""
+        for page in self.pages("/platform-users/list", {"limit": limit}):
+            yield from page.data
+
+    def iter_platform_leaderboard(
+        self,
+        *,
+        blockchain: Chain,
+        period: Period | None = None,
+        sort: LeaderboardSort | None = None,
+        limit: int | None = None,
+        trust: LeaderboardTrust | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Every entry of the platform leaderboard, following ``next_cursor``."""
+        query = _platform_leaderboard_query(blockchain, period, sort, trust, limit, None)
+        for page in self.pages("/platform-users/leaderboard", query):
+            yield from page.data.get("leaderboard", [])
+
+    def offset_items(
+        self, path: str, params: Mapping[str, Any] | None = None, *, key: str | None = None
+    ) -> Iterator[Any]:
+        """Walks an offset-paginated route (competitions) until ``pagination.total`` is reached.
+
+        ``key``: the list inside ``data`` (e.g. ``"standings"``); None when ``data`` is the list.
+        """
+        query = dict(params or {})
+        offset = int(query.pop("offset", None) or 0)
+        while True:
+            page = self.get_raw(path, {**query, "offset": offset or None})
+            items = page.data if key is None else page.data.get(key, [])
+            yield from items
+            offset += len(items)
+            total = (page.pagination or {}).get("total")
+            if not items or total is None or offset >= total:
+                return
+
+    def iter_competitions(
+        self, *, status: CompetitionStatus | None = None, limit: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Every competition of your instance, newest first."""
+        _one_of(status, COMPETITION_STATUSES, "status")
+        yield from self.offset_items("/competitions", {"status": status, "limit": limit})
+
+    def iter_competition_participants(self, id: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Every participant of a competition, in join order."""
+        _required(id, "id")
+        yield from self.offset_items("/competitions/participants", {"id": id, "limit": limit})
+
+    def iter_competition_standings(self, id: str, *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Every trader of a competition's standings: ranked first, then the unranked."""
+        _required(id, "id")
+        yield from self.offset_items("/competitions/standings", {"id": id, "limit": limit}, key="standings")
+
 
 class AsyncCabalSpyID(_BaseClient):
     """Asynchronous Data API client.
@@ -841,6 +1600,18 @@ class AsyncCabalSpyID(_BaseClient):
 
     async def get_raw(self, path: str, params: Mapping[str, Any] | None = None, *, auth: bool = True) -> Envelope:
         """Any GET, returning the full envelope (data, pagination, meta, rate limit)."""
+        return await self._send_get(path, params, auth, self._interpret)
+
+    async def get_text(self, path: str, params: Mapping[str, Any] | None = None) -> str:
+        """Async version of :meth:`CabalSpyID.get_text`."""
+        return await self._send_get(path, params, True, self._interpret_text)
+
+    async def _get_text(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
+        return await self.get_text(path, params)
+
+    async def _send_get(
+        self, path: str, params: Mapping[str, Any] | None, auth: bool, parse: Callable[[httpx.Response, str], _T]
+    ) -> _T:
         url, query, headers = self._prepare(path, params, auth)
         last: BaseException | None = None
         for attempt in range(self.max_retries + 1):
@@ -852,7 +1623,7 @@ class AsyncCabalSpyID(_BaseClient):
                 last = self._connection_error(exc, path)
                 continue
             try:
-                return self._interpret(response, path)
+                return parse(response, path)
             except CabalSpyIDError as exc:
                 if is_retryable(exc) and attempt < self.max_retries:
                     last = exc
@@ -948,6 +1719,97 @@ class AsyncCabalSpyID(_BaseClient):
         async for page in self.pages("/theses/replies", {"id": id, "limit": limit, "csid_id": csid_id}):
             for item in page.data:
                 yield item
+
+    # ── white-label ──────────────────────────────────────────────────────
+
+    async def bulk_import_platform_users(
+        self,
+        users: Iterable[PlatformUserInput],
+        *,
+        chunk_size: int = PLATFORM_IMPORT_MAX,
+        max_attempts: int = 5,
+        max_body_bytes: int = _IMPORT_BODY_BYTES,
+    ) -> PlatformBulkImportResult:
+        """Async version of :meth:`CabalSpyID.bulk_import_platform_users`."""
+        run = _ImportRun(users, chunk_size, max_body_bytes, max_attempts)
+        for chunk_no, chunk in enumerate(run.chunks):
+            pending, attempt = chunk, 0
+            while pending:
+                attempt += 1
+                try:
+                    data = await self._post(_IMPORT_PATH, run.body(pending))
+                except RateLimitError as exc:
+                    if attempt >= max_attempts:
+                        raise run.failed(exc, chunk_no, pending) from exc
+                    await asyncio.sleep(_backoff(attempt, exc))
+                    continue
+                except CabalSpyIDError as exc:
+                    raise run.failed(exc, chunk_no, pending) from exc
+                pending = run.record(pending, data)
+                if pending and attempt >= max_attempts:
+                    break
+                if pending:
+                    await asyncio.sleep(_import_wait())
+        return run.result()  # type: ignore[return-value]
+
+    async def iter_platform_users(self, *, limit: int | None = None) -> AsyncIterator[dict[str, Any]]:
+        """Every platform user of your instance, newest first, following ``next_cursor``."""
+        async for page in self.pages("/platform-users/list", {"limit": limit}):
+            for user in page.data:
+                yield user
+
+    async def iter_platform_leaderboard(
+        self,
+        *,
+        blockchain: Chain,
+        period: Period | None = None,
+        sort: LeaderboardSort | None = None,
+        limit: int | None = None,
+        trust: LeaderboardTrust | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every entry of the platform leaderboard, following ``next_cursor``."""
+        query = _platform_leaderboard_query(blockchain, period, sort, trust, limit, None)
+        async for page in self.pages("/platform-users/leaderboard", query):
+            for entry in page.data.get("leaderboard", []):
+                yield entry
+
+    async def offset_items(
+        self, path: str, params: Mapping[str, Any] | None = None, *, key: str | None = None
+    ) -> AsyncIterator[Any]:
+        """Async version of :meth:`CabalSpyID.offset_items`."""
+        query = dict(params or {})
+        offset = int(query.pop("offset", None) or 0)
+        while True:
+            page = await self.get_raw(path, {**query, "offset": offset or None})
+            items = page.data if key is None else page.data.get(key, [])
+            for item in items:
+                yield item
+            offset += len(items)
+            total = (page.pagination or {}).get("total")
+            if not items or total is None or offset >= total:
+                return
+
+    async def iter_competitions(
+        self, *, status: CompetitionStatus | None = None, limit: int | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every competition of your instance, newest first."""
+        _one_of(status, COMPETITION_STATUSES, "status")
+        async for item in self.offset_items("/competitions", {"status": status, "limit": limit}):
+            yield item
+
+    async def iter_competition_participants(
+        self, id: str, *, limit: int | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every participant of a competition, in join order."""
+        _required(id, "id")
+        async for item in self.offset_items("/competitions/participants", {"id": id, "limit": limit}):
+            yield item
+
+    async def iter_competition_standings(self, id: str, *, limit: int | None = None) -> AsyncIterator[dict[str, Any]]:
+        """Every trader of a competition's standings: ranked first, then the unranked."""
+        _required(id, "id")
+        async for item in self.offset_items("/competitions/standings", {"id": id, "limit": limit}, key="standings"):
+            yield item
 
 
 def _users_query(params: Mapping[str, Any]) -> dict[str, Any]:
