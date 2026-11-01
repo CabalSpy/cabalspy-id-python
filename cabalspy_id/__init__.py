@@ -2,7 +2,7 @@
 
 Login with CabalSpy ID (OpenID Connect), the Data API for verified wallets, KOL
 badges, trading stats and token theses, white-label platform users, trading
-competitions, callouts, the live stream, the public thesis API and webhook verification.
+competitions, callouts, copy trading, the live stream, the public thesis API and webhook verification.
 
     from cabalspy_id import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -31,10 +31,19 @@ from ._constants import (
     COMPETITION_METRICS,
     COMPETITION_STATUSES,
     COMPETITION_WEBHOOK_EVENTS,
+    COPY_DEFAULT_SLIPPAGE_BPS,
+    COPY_INSTRUCTION_STATUSES,
+    COPY_INSTRUCTION_TTL_SECONDS,
+    COPY_MIN_USD,
+    COPY_MODES,
+    COPY_REPORT_STATUSES,
+    COPY_SIDES,
+    COPY_TRADING_WEBHOOK_EVENTS,
     CURRENCY_BY_CHAIN,
     DATA_SCOPES,
     DEFAULT_BASE_URL,
     DEFAULT_CALLOUTS_STREAM_URL,
+    DEFAULT_COPY_TRADING_STREAM_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
@@ -44,6 +53,7 @@ from ._constants import (
     INBOUND_FORMATS,
     LEADERBOARD_SORTS,
     MAX_CALLOUT_STREAMS_PER_KEY,
+    MAX_COPY_TRADING_STREAMS_PER_KEY,
     MAX_OPEN_COMPETITIONS,
     MAX_REQUEST_BODY_BYTES,
     MAX_THESES_STREAM_TOKENS,
@@ -72,6 +82,11 @@ from ._constants import (
     CompetitionKind,
     CompetitionMetric,
     CompetitionStatus,
+    CopyInstructionStatus,
+    CopyMode,
+    CopyReportStatus,
+    CopySide,
+    CopySides,
     Currency,
     DataScope,
     LeaderboardSort,
@@ -150,6 +165,14 @@ from ._types import (
     CompetitionParticipant,
     CompetitionStanding,
     CompetitionStandings,
+    CopyAction,
+    CopyInstruction,
+    CopyLinks,
+    CopySettings,
+    CopySourceTrade,
+    CopyTrader,
+    CopyTradingSetting,
+    CopyTradingStreamReady,
     DiscoveryDocument,
     HealthResponse,
     HistoryResponse,
@@ -255,6 +278,10 @@ def __getattr__(name: str) -> object:
         from . import _callouts_stream
 
         return getattr(_callouts_stream, name)
+    if name in ("CopyTradingStream", "COPY_TRADING_STREAM_EVENTS", "COPY_TRADING_EVENTS"):
+        from . import _copy_trading_stream
+
+        return getattr(_copy_trading_stream, name)
     raise AttributeError(f"module 'cabalspy_id' has no attribute {name!r}")
 
 
@@ -266,6 +293,7 @@ __all__ = [
     "CabalSpyIDStream",
     "ThesesStream",
     "CalloutsStream",
+    "CopyTradingStream",
     "Envelope",
     "CabalSpyIDAuth",
     "AsyncCabalSpyIDAuth",
@@ -499,4 +527,30 @@ __all__ = [
     "CalloutRemovedEvent",
     "CalloutsStreamReady",
     "CalloutWebhookData",
+    # copy trading
+    "COPY_TRADING_STREAM_EVENTS",
+    "COPY_TRADING_EVENTS",
+    "COPY_TRADING_WEBHOOK_EVENTS",
+    "COPY_MODES",
+    "COPY_SIDES",
+    "COPY_INSTRUCTION_STATUSES",
+    "COPY_REPORT_STATUSES",
+    "COPY_INSTRUCTION_TTL_SECONDS",
+    "COPY_MIN_USD",
+    "COPY_DEFAULT_SLIPPAGE_BPS",
+    "MAX_COPY_TRADING_STREAMS_PER_KEY",
+    "DEFAULT_COPY_TRADING_STREAM_URL",
+    "CopyMode",
+    "CopySides",
+    "CopySide",
+    "CopyInstructionStatus",
+    "CopyReportStatus",
+    "CopyTrader",
+    "CopySettings",
+    "CopyTradingSetting",
+    "CopyAction",
+    "CopySourceTrade",
+    "CopyLinks",
+    "CopyInstruction",
+    "CopyTradingStreamReady",
 ]

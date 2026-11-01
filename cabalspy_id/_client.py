@@ -32,9 +32,14 @@ from ._constants import (
     COMPETITION_KINDS,
     COMPETITION_METRICS,
     COMPETITION_STATUSES,
+    COPY_INSTRUCTION_STATUSES,
+    COPY_MODES,
+    COPY_REPORT_STATUSES,
+    COPY_SIDES,
     DATA_SCOPES,
     DEFAULT_BASE_URL,
     DEFAULT_CALLOUTS_STREAM_URL,
+    DEFAULT_COPY_TRADING_STREAM_URL,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
     LEADERBOARD_SORTS,
@@ -55,6 +60,10 @@ from ._constants import (
     CompetitionKind,
     CompetitionMetric,
     CompetitionStatus,
+    CopyInstructionStatus,
+    CopyMode,
+    CopyReportStatus,
+    CopySides,
     DataScope,
     LeaderboardSort,
     LeaderboardTrust,
@@ -84,6 +93,7 @@ from ._types import PlatformBulkImportResult, PlatformUserInput, PlatformWalletI
 
 if TYPE_CHECKING:
     from ._callouts_stream import CalloutsStream
+    from ._copy_trading_stream import CopyTradingStream
     from ._stream import CabalSpyIDStream
     from ._theses_stream import ThesesStream
 
@@ -361,6 +371,71 @@ def _callout_leaderboard_query(
         "limit": limit,
         "cursor": cursor,
     }
+
+
+def _copy_trader(trader: Any, trader_external_id: Any, *, required: bool) -> dict[str, Any]:
+    """The copied trader: a handle / csid_id (``trader``) or your platform's user id."""
+    if trader and trader_external_id:
+        raise BadRequestError(
+            "Pass at most one of: trader, trader_external_id.",
+            code="invalid_parameter",
+            parameter="trader|trader_external_id",
+        )
+    if required and not (trader or trader_external_id):
+        raise BadRequestError("Pass one of: trader, trader_external_id.", code="missing_parameter", parameter="trader")
+    if trader:
+        return {"trader": trader}
+    return {"trader_external_id": trader_external_id} if trader_external_id else {}
+
+
+def _number(value: Any, parameter: str, low: float, high: float, *, integer: bool = False) -> None:
+    """A number above ``low`` and at most ``high`` (whole for ``integer``)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low < value <= high:
+        kind = "a whole number" if integer else "a number"
+        raise BadRequestError(
+            f"{parameter} must be {kind} above {low:g} and at most {high:g}.",
+            code="invalid_parameter",
+            parameter=parameter,
+        )
+    if integer and value != int(value):
+        raise BadRequestError(f"{parameter} must be a whole number.", code="invalid_parameter", parameter=parameter)
+
+
+def _copy_settings_fields(**fields: Any) -> dict[str, Any]:
+    """Copy settings to change: None = unchanged, except ``max_usd`` (None removes the cap)."""
+    out = {k: v for k, v in _given(**fields).items() if v is not None or k == "max_usd"}
+    _one_of(out.get("mode"), COPY_MODES, "mode")
+    _one_of(out.get("sides"), COPY_SIDES, "sides")
+    if "enabled" in out and not isinstance(out["enabled"], bool):
+        raise BadRequestError("enabled must be True or False.", code="invalid_parameter", parameter="enabled")
+    if "amount_usd" in out:
+        _number(out["amount_usd"], "amount_usd", 0, 1_000_000)
+    if "percent" in out:
+        _number(out["percent"], "percent", 0, 1000)
+    if out.get("max_usd") is not None:
+        _number(out["max_usd"], "max_usd", 0, 1_000_000)
+    if "slippage_bps" in out:
+        _number(out["slippage_bps"], "slippage_bps", 0, 5000, integer=True)
+    if not out:
+        raise BadRequestError(
+            "Pass at least one of: enabled, mode, amount_usd, percent, max_usd, sides, slippage_bps.",
+            code="missing_parameter",
+            parameter="enabled",
+        )
+    return out
+
+
+def _copy_instructions_query(external_id: Any, csid_id: Any, status: Any, limit: Any, cursor: Any) -> dict[str, Any]:
+    if external_id and csid_id:
+        raise BadRequestError(
+            "Pass at most one of: external_id, csid_id.", code="invalid_parameter", parameter="external_id|csid_id"
+        )
+    _one_of(status, COPY_INSTRUCTION_STATUSES, "status")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100):
+        raise BadRequestError(
+            "limit must be a whole number from 1 to 100.", code="invalid_parameter", parameter="limit"
+        )
+    return {"external_id": external_id, "csid_id": csid_id, "status": status, "limit": limit, "cursor": cursor}
 
 
 def _import_items(users: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1438,6 +1513,139 @@ class _Endpoints:
             raise BadRequestError("Pass at least one setting.", code="missing_parameter", parameter="settings")
         return self._post("/callouts/settings", changes)
 
+    # ── copy trading ─────────────────────────────────────────────────────
+    # Every trade of a trader a user copies becomes a ready-to-execute instruction for
+    # that user, sized by their copy settings. CabalSpy ID never holds keys and never
+    # executes: your app executes the instruction with the user's wallet and reports the
+    # status back. Needs the user's consent with the scope trade_feed (else
+    # PermissionError consent_required). Copying a trader is switched on by one platform
+    # at a time: only its apps get the instructions (webhook copy_trade.instruction,
+    # copy_trading_stream(), copy_instructions()).
+
+    def copy_trading_settings(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        trader: str | None = None,
+        trader_external_id: str | None = None,
+    ) -> Any:
+        """GET /v1/copy-trading/settings — the copy settings of a user's traders (everyone in
+        their Trade Feed, copied ones first), or of one ``trader`` (handle or csid_id;
+        ``trader_external_id`` for one of your platform users).
+
+        Returns a list of :class:`~cabalspy_id.CopyTradingSetting`, or one with a trader. A
+        trader who is not in the user's Trade Feed raises NotFoundError ``not_in_trade_feed``
+        (an unknown one ``trader_not_found``).
+        """
+        who = _who(external_id, csid_id)
+        return self._get("/copy-trading/settings", {**who, **_copy_trader(trader, trader_external_id, required=False)})
+
+    def update_copy_trading_settings(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        trader: str | None = None,
+        trader_external_id: str | None = None,
+        enabled: bool | None = None,
+        mode: CopyMode | None = None,
+        amount_usd: float | None = None,
+        percent: float | None = None,
+        max_usd: float | _NotGiven | None = NOT_GIVEN,
+        sides: CopySides | None = None,
+        slippage_bps: int | None = None,
+    ) -> Any:
+        """POST /v1/copy-trading/settings — changes how a user copies one trader (handle or
+        csid_id, or ``trader_external_id``); the trader is added to their Trade Feed first if
+        needed. Only the settings you pass change (None = unchanged; ``max_usd=None`` removes
+        the cap).
+
+        ``mode``: ``fixed_usd`` (every buy is ``amount_usd``, up to 1,000,000) or ``percent``
+        (``percent`` % of the trader's buy, up to 1000); ``max_usd`` caps a buy; ``sides``:
+        ``buys`` or ``both`` (sells as a share of the copied position); ``slippage_bps``
+        1-5000 (default 300). Buys under $1 are not sent.
+
+        While another platform copies this trader for the user, this raises ConflictError
+        ``copy_managed_elsewhere``. Returns :class:`~cabalspy_id.CopyTradingSetting`
+        (HTTP 201 when the trader was added to the Trade Feed).
+        """
+        who = _who(external_id, csid_id)
+        target = _copy_trader(trader, trader_external_id, required=True)
+        fields = _copy_settings_fields(
+            enabled=enabled,
+            mode=mode,
+            amount_usd=amount_usd,
+            percent=percent,
+            max_usd=max_usd,
+            sides=sides,
+            slippage_bps=slippage_bps,
+        )
+        return self._post("/copy-trading/settings", {**who, **target, **fields})
+
+    def copy_instructions(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        status: CopyInstructionStatus | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/copy-trading/instructions — your instance's copy instructions, newest first
+        (``limit`` 1-100, default 50); one user's with ``external_id`` / ``csid_id``.
+        ``status``: pending, executed, failed, skipped or expired (pending past ``expires_at``).
+
+        Returns a list of :class:`~cabalspy_id.CopyInstruction`; see ``iter_copy_instructions``.
+        """
+        return self._get(
+            "/copy-trading/instructions", _copy_instructions_query(external_id, csid_id, status, limit, cursor)
+        )
+
+    def copy_instruction(self, id: str) -> Any:
+        """GET /v1/copy-trading/instructions/item — one instruction. Returns
+        :class:`~cabalspy_id.CopyInstruction`."""
+        _required(id, "id")
+        return self._get("/copy-trading/instructions/item", {"id": id})
+
+    def report_copy_instruction(
+        self,
+        id: str,
+        *,
+        status: CopyReportStatus,
+        tx_signature: str | None = None,
+        executed_amount_usd: float | None = None,
+        note: str | None = None,
+    ) -> Any:
+        """POST /v1/copy-trading/instructions/status — what happened to an instruction:
+        ``executed`` (with ``tx_signature`` and ``executed_amount_usd``), ``failed`` or
+        ``skipped`` (``note`` up to 300 characters, e.g. the reason).
+
+        A final status cannot change: the same report twice is fine, another one raises
+        ConflictError ``already_reported``. A copied buy reported failed or skipped means
+        the trader's later sells of that token are not sent. Expired instructions may still
+        be reported executed. Returns :class:`~cabalspy_id.CopyInstruction`.
+        """
+        _required(id, "id")
+        _required(status, "status")
+        _one_of(status, COPY_REPORT_STATUSES, "status")
+        if tx_signature is not None and (not isinstance(tx_signature, str) or not 10 <= len(tx_signature) <= 200):
+            raise BadRequestError(
+                "tx_signature must be a transaction signature or hash (10-200 characters).",
+                code="invalid_parameter",
+                parameter="tx_signature",
+            )
+        if executed_amount_usd is not None:
+            _number(executed_amount_usd, "executed_amount_usd", 0, 10_000_000)
+        body: dict[str, Any] = {"id": id, "status": status}
+        if tx_signature is not None:
+            body["tx_signature"] = tx_signature
+        if executed_amount_usd is not None:
+            body["executed_amount_usd"] = executed_amount_usd
+        if note is not None:
+            body["note"] = note
+        return self._post("/copy-trading/instructions/status", body)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIENTS
@@ -1454,6 +1662,7 @@ class _BaseClient(_Endpoints):
         stream_url: str | None = None,
         theses_stream_url: str | None = None,
         callouts_stream_url: str | None = None,
+        copy_trading_stream_url: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 2,
         headers: Mapping[str, str] | None = None,
@@ -1467,6 +1676,7 @@ class _BaseClient(_Endpoints):
         self.stream_url = (stream_url or _env("CABALSPY_ID_STREAM_URL") or DEFAULT_STREAM_URL).rstrip("/")
         self.theses_stream_url = (theses_stream_url or DEFAULT_THESES_STREAM_URL).rstrip("/")
         self.callouts_stream_url = (callouts_stream_url or DEFAULT_CALLOUTS_STREAM_URL).rstrip("/")
+        self.copy_trading_stream_url = (copy_trading_stream_url or DEFAULT_COPY_TRADING_STREAM_URL).rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self._extra_headers = dict(headers or {})
@@ -1603,6 +1813,17 @@ class _BaseClient(_Endpoints):
         return CalloutsStream(
             self.callouts_stream_url, self._api_key, chain=chain, mint=mint, instance=self.instance, **kwargs
         )
+
+    def copy_trading_stream(self, **kwargs: Any) -> CopyTradingStream:
+        """Every new copy instruction of your instance, live (``copy_trade.instruction``). Async only.
+
+        Needs the ``stream`` extra: ``pip install "cabalspy-id[stream]"``.
+        """
+        if not self._api_key:
+            raise AuthenticationError("The copy trading stream needs an API key.", status=401, code="missing_api_key")
+        from ._copy_trading_stream import CopyTradingStream
+
+        return CopyTradingStream(self.copy_trading_stream_url, self._api_key, instance=self.instance, **kwargs)
 
 
 class CabalSpyID(_BaseClient):
@@ -1882,6 +2103,21 @@ class CabalSpyID(_BaseClient):
         for page in self.pages("/callouts/leaderboard", query):
             yield from page.data.get("leaderboard", [])
 
+    # ── copy trading ─────────────────────────────────────────────────────
+
+    def iter_copy_instructions(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        status: CopyInstructionStatus | None = None,
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Every copy instruction matching the filters, newest first, following ``next_cursor``."""
+        query = _copy_instructions_query(external_id, csid_id, status, limit, None)
+        for page in self.pages("/copy-trading/instructions", query):
+            yield from page.data
+
 
 class AsyncCabalSpyID(_BaseClient):
     """Asynchronous Data API client.
@@ -2156,6 +2392,22 @@ class AsyncCabalSpyID(_BaseClient):
         async for page in self.pages("/callouts/leaderboard", query):
             for entry in page.data.get("leaderboard", []):
                 yield entry
+
+    # ── copy trading ─────────────────────────────────────────────────────
+
+    async def iter_copy_instructions(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        status: CopyInstructionStatus | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every copy instruction matching the filters, newest first, following ``next_cursor``."""
+        query = _copy_instructions_query(external_id, csid_id, status, limit, None)
+        async for page in self.pages("/copy-trading/instructions", query):
+            for item in page.data:
+                yield item
 
 
 def _users_query(params: Mapping[str, Any]) -> dict[str, Any]:
