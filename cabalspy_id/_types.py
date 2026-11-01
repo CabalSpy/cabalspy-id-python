@@ -11,7 +11,7 @@ Timestamps are ISO 8601 UTC strings ("2026-10-12T08:00:00Z"), except
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypeAlias, TypedDict
 
 from ._constants import (
     CalloutFirstDayKind,
@@ -36,6 +36,8 @@ from ._constants import (
     PlatformImportStatus,
     PlatformWalletStatus,
     Scope,
+    ThesisStance,
+    TradeLabel,
     VerificationStatus,
     WalletTrust,
 )
@@ -1584,4 +1586,171 @@ class CopyInstruction(_CopyInstructionOptional):
 
 
 class CopyTradingStreamReady(TypedDict):
+    events: list[str]
+
+
+# ── trade feed ───────────────────────────────────────────────────────────────
+
+
+class TradeFeedTrade(TypedDict):
+    """A trade in the Trade Feed (``item["trade"]``)."""
+
+    blockchain: Chain
+    mint: str
+    symbol: str | None
+    name: str | None
+    logo: str | None
+    side: CopySide
+    #: new, add, partial, close or sell.
+    label: TradeLabel
+    #: partial: the share of the position sold, 0-100; else None.
+    sold_percent: float | None
+    #: Trade size in the chain's native coin (``currency``).
+    amount_native: float
+    currency: Currency | None
+    amount_usd: float | None
+    token_amount: float | None
+    price_usd: float | None
+    #: Sells with a known entry: realized PnL of this sell against the average entry.
+    pnl_usd: float | None
+    pnl_percent: float | None
+    wallet: str
+    wallet_url: str | None
+    tx_signature: str
+    tx_url: str | None
+
+
+class TradeFeedThesis(TypedDict):
+    """A thesis in the Trade Feed (``item["thesis"]``)."""
+
+    id: str
+    blockchain: Chain
+    mint: str
+    symbol: str | None
+    name: str | None
+    logo: str | None
+    stance: ThesisStance | None
+    body: str
+    likes: int
+    replies: int
+    url: str
+
+
+class _TradeFeedItemOptional(TypedDict, total=False):
+    #: GET /v1/trade-feed only: the item's position in the feed.
+    cursor: str
+
+
+class TradeFeedTradeItem(_TradeFeedItemOptional):
+    """A trade item: the same ``id`` everywhere (feed, webhook, stream, notifications)."""
+
+    id: str
+    type: Literal["trade"]
+    timestamp: str
+    trader: CopyTrader
+    trade: TradeFeedTrade
+    #: token (the CabalSpy Terminal on Solana and BNB Chain, else the token's theses),
+    #: terminal (None outside Solana and BNB Chain), profile.
+    links: CopyLinks
+
+
+class TradeFeedThesisItem(_TradeFeedItemOptional):
+    """A thesis item; ``id`` is ``"h"`` followed by the thesis id."""
+
+    id: str
+    type: Literal["thesis"]
+    timestamp: str
+    trader: CopyTrader
+    thesis: TradeFeedThesis
+    links: CopyLinks
+
+
+#: GET /v1/trade-feed: a trade or a thesis (check ``item["type"]``).
+TradeFeedItem: TypeAlias = TradeFeedTradeItem | TradeFeedThesisItem
+
+
+class TradeFeedMinNative(TypedDict):
+    """Minimum trade size for alerts per native coin (0 = every trade)."""
+
+    SOL: float
+    BNB: float
+    ETH: float
+
+
+class TradeFeedSettings(TypedDict):
+    """A user's alert settings for one trader, plus the copy settings."""
+
+    notify_buys: bool
+    notify_sells: bool
+    notify_theses: bool
+    min_native: TradeFeedMinNative
+    #: No alerts for this trader.
+    muted: bool
+    #: How the user copies this trader (see copy trading).
+    copy: CopySettings
+
+
+class TradeFeedTrader(TypedDict):
+    """GET /v1/trade-feed/traders: one trader in the user's Trade Feed."""
+
+    trader: CopyTrader
+    #: False while the trader keeps their trading private: they stay in the list, but
+    #: nothing of them shows in the feed.
+    trading_public: bool
+    added_at: str
+    #: In how many Trade Feeds the trader is.
+    in_trade_feeds: int
+    settings: TradeFeedSettings
+
+
+class TradeFeedTraderResult(TypedDict):
+    """POST /v1/trade-feed/traders (HTTP 201 when added, 200 when already there)."""
+
+    in_trade_feed: Literal[True]
+    #: True when the trader was added, False when they were already in the Trade Feed.
+    created: bool
+    trader: CopyTrader
+    settings: TradeFeedSettings
+
+
+class TradeFeedRemoveResult(TypedDict):
+    """POST /v1/trade-feed/traders/delete."""
+
+    in_trade_feed: Literal[False]
+    #: False when the trader was not in the Trade Feed.
+    removed: bool
+
+
+class TradeFeedNotification(TypedDict):
+    """GET /v1/trade-feed/notifications: an alert that passed the user's filters."""
+
+    id: int
+    #: trade_feed.trade or trade_feed.thesis.
+    event: str
+    #: A ready-made line in plain text.
+    text: str | None
+    created_at: str
+    data: TradeFeedItem
+
+
+class _TradeFeedRecipients(TypedDict):
+    #: csid_ids of your users to tell (trader in their Trade Feed, filters passed).
+    recipients: list[str]
+    #: Your own user ids (external_id) of the recipients who are platform users.
+    recipients_external: list[str]
+
+
+class TradeFeedTradeEvent(TradeFeedTradeItem, _TradeFeedRecipients):
+    """``data`` of the webhook and stream event ``trade_feed.trade``."""
+
+
+class TradeFeedThesisEvent(TradeFeedThesisItem, _TradeFeedRecipients):
+    """``data`` of the webhook and stream event ``trade_feed.thesis``."""
+
+
+#: ``data`` of a Trade Feed webhook or stream event.
+TradeFeedEvent: TypeAlias = TradeFeedTradeEvent | TradeFeedThesisEvent
+
+
+class TradeFeedStreamReady(TypedDict):
     events: list[str]

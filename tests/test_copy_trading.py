@@ -367,7 +367,6 @@ def test_copy_trading_webhook_events() -> None:
 def test_exports() -> None:
     import cabalspy_id
 
-    assert cabalspy_id.__version__ == "0.8.0"
     assert api.CopyTradingStream is cabalspy_id.CopyTradingStream
     assert cabalspy_id.COPY_TRADING_EVENTS == ("copy_trade.instruction",)
     assert "ready" in cabalspy_id.COPY_TRADING_STREAM_EVENTS

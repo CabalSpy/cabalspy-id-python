@@ -21,7 +21,7 @@ pip install "cabalspy-id[stream]"
 | | |
 |---|---|
 | `CabalSpyIDAuth` / `AsyncCabalSpyIDAuth` | OpenID Connect for your server: PKCE, code exchange, refresh, revoke, userinfo, ID token verification (ES256 / JWKS) |
-| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream, white-label platform users, trading competitions, callouts (on request) and copy trading |
+| `CabalSpyID` / `AsyncCabalSpyID` | Data API client for `https://api-id.cabalspy.xyz/v1`, typed responses, pagination, live trade stream, white-label platform users, trading competitions, callouts (on request), the Trade Feed and copy trading |
 | `ThesisClient` / `AsyncThesisClient` | public token thesis API with your public `client_id` and a user's access token, plus `live()` updates |
 | `verify_webhook` | Standard Webhooks signature verification |
 
@@ -56,7 +56,7 @@ One codebase, one version line. The focused packages re-export parts of `cabalsp
 | Import | Contents |
 |---|---|
 | `cabalspy_id` | everything |
-| `cabalspy_id.api` | `CabalSpyID`, `AsyncCabalSpyID`, `CabalSpyIDStream`, `CalloutsStream`, `CopyTradingStream`, `CabalSpyIDAuth`, `verify_webhook`, errors and Data API types |
+| `cabalspy_id.api` | `CabalSpyID`, `AsyncCabalSpyID`, `CabalSpyIDStream`, `CalloutsStream`, `CopyTradingStream`, `TradeFeedStream`, `CabalSpyIDAuth`, `verify_webhook`, errors and Data API types |
 | `cabalspy_id.thesis` | `CabalSpyID` (thesis methods), `ThesisClient`, `AsyncThesisClient`, `ThesisLive`, `ThesesStream`, thesis types |
 
 The objects are the same as in `cabalspy_id`.
@@ -231,13 +231,13 @@ except RateLimitError as err:
 
 | Class | Status | Codes |
 |---|---|---|
-| `BadRequestError` | 400, 422 | `missing_parameter`, `invalid_parameter`, `instance_required`, `wallet_required`, `invalid_address`, `invalid_return_url`, `no_price` (422) |
+| `BadRequestError` | 400, 422 | `missing_parameter`, `invalid_parameter`, `instance_required`, `wallet_required`, `invalid_address`, `invalid_return_url`, `cannot_add_self`, `no_price` (422) |
 | `AuthenticationError` | 401 | `missing_api_key` |
 | `PermissionError` | 403 | `invalid_api_key`, `product_not_enabled`, `no_instance`, `scope_not_allowed`, `claim_disabled`, `feature_not_enabled`, `kol_only`, `not_a_holder`, `invalid_account`, `posting_paused`, `consent_required`, `sandbox_user`, `trading_private` |
 | `PlanUserLimitError` | 403 | `plan_user_limit` |
 | `NotFoundError` | 404 | `profile_not_found`, `wallet_not_found`, `instance_not_found`, `platform_user_not_found`, `verification_not_found`, `competition_not_found`, `callout_not_found`, `trader_not_found`, `not_in_trade_feed`, `not_found` |
 | `ConflictError` | 409 | `account_claimed`, `last_wallet`, `too_many_wallets`, `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`, `competition_closed`, `competition_full`, `late_join_closed`, `already_called`, `copy_managed_elsewhere`, `already_reported`, `trade_feed_full` |
-| `RateLimitError` | 429 | `rate_limit_exceeded`, `rate_limited`, `too_many_open_verifications`, `callout_cooldown` |
+| `RateLimitError` | 429 | `rate_limit_exceeded`, `rate_limited` (also the Trade Feed's 120 changes per hour; not retried), `too_many_open_verifications`, `callout_cooldown` |
 | `ServerError` | 5xx | `internal_error`, `service_unavailable` |
 | `APIConnectionError` | – | network failure, timeout |
 | `OAuthError` | 4xx | OAuth errors from the login endpoints (`invalid_grant`, `invalid_client`, …) |
@@ -405,6 +405,65 @@ comp = csid.create_competition(name="Caller of the week", kind="callouts", chain
 ```
 
 A full tour is in [`examples/callouts.py`](examples/callouts.py).
+
+## Trade Feed
+
+A user's **Trade Feed** is the traders they follow: every trade and thesis of those traders, alerts filtered per trader, and the [copy settings](#copy-trading). Read and manage it from your backend in the user's name: a person who signed in to your app with the scope `trade_feed` (else `PermissionError` `consent_required`), or one of your platform users, within your plan's user limit. Every method takes the user as `external_id` (positional, your own user id) or `csid_id=`; a trader is a handle (with or without @) or a csid_id, or `trader_external_id=` for one of your platform users.
+
+```python
+from cabalspy_id import CabalSpyID, ConflictError, PermissionError
+
+csid = CabalSpyID()
+
+# Add @MazeCCC to user_42's Trade Feed: alerts for buys from 0.5 SOL, no sells
+try:
+    r = csid.add_trade_feed_trader("user_42", trader="@MazeCCC", min_sol=0.5, notify_sells=False)
+    print(r["created"], r["settings"]["min_native"])     # True on HTTP 201, False when already there
+except PermissionError as err:                           # consent_required, trading_private
+    print(err.code)
+except ConflictError:                                    # trade_feed_full: 300 traders
+    pass
+
+for item in csid.iter_trade_feed("user_42", filter="buys"):  # newest first
+    t = item["trade"]
+    print(item["trader"]["username"], t["side"], t["symbol"], t["amount_usd"], t["label"])
+
+for entry in csid.iter_trade_feed_traders("user_42"):
+    print(entry["trader"]["username"], entry["settings"]["muted"], entry["settings"]["copy"]["enabled"])
+
+csid.remove_trade_feed_trader("user_42", trader="MazeCCC")  # also ends copying
+```
+
+| Method | Endpoint |
+|---|---|
+| `trade_feed(external_id \| csid_id=, filter=, limit=, cursor=)` / `iter_trade_feed()` | `GET /v1/trade-feed` |
+| `trade_feed_traders(external_id \| csid_id=, limit=, cursor=)` / `iter_trade_feed_traders()` | `GET /v1/trade-feed/traders` |
+| `add_trade_feed_trader(external_id \| csid_id=, trader= \| trader_external_id=, notify_buys=, notify_sells=, notify_theses=, min_sol=, min_bnb=, min_eth=, muted=)` | `POST /v1/trade-feed/traders` |
+| `remove_trade_feed_trader(external_id \| csid_id=, trader= \| trader_external_id=)` | `POST /v1/trade-feed/traders/delete` |
+| `trade_feed_notifications(external_id \| csid_id=, limit=, cursor=)` / `iter_trade_feed_notifications()` | `GET /v1/trade-feed/notifications` |
+| `trade_feed_stream()` | `WS /v1/trade-feed/stream` |
+
+**The feed** (`TradeFeedItem`, newest first; `filter` `all`, `buys`, `sells` or `theses`; `limit` 1-100, default 30): trade items (`type` `trade`: `trader`, `trade` with `side`, `label` (`new`, `add`, `partial`, `close`, `sell`), `sold_percent`, `amount_native` in `currency`, `amount_usd`, `price_usd`, `pnl_usd` / `pnl_percent` for sells with a known entry, `wallet`, `tx_signature` and explorer links) and thesis items (`type` `thesis`, `id` `h` + the thesis id). An item's `id` is the same in the feed, the webhook, the stream and the notifications. Traders who keep their trading private are left out.
+
+**Traders** (`TradeFeedTrader`, most recently added first; `limit` 1-300, default 100; the envelope's pagination has `total` and `max`): `trader`, `trading_public`, `added_at`, `in_trade_feeds` and `settings` (`notify_buys`, `notify_sells`, `notify_theses`, `min_native` `{"SOL", "BNB", "ETH"}`, `muted`, and `copy`, the `CopySettings`). `add_trade_feed_trader` uses the user's default alert settings unless you pass others; for a trader already there it updates what you pass (None = unchanged). `min_*` are 0 to 1,000,000 (0 = every trade).
+
+**Notifications** (`TradeFeedNotification`, `limit` 1-100, default 50): every alert that passed the user's filters, with `id`, `event` (`trade_feed.trade` / `trade_feed.thesis`), a ready-made `text`, `created_at` and the item as `data`. Useful as an inbox when you do not use webhooks.
+
+**Errors.** `BadRequestError` `cannot_add_self`; `PermissionError` `consent_required`, `trading_private`; `PlanUserLimitError` `plan_user_limit` (an `anon_` id); `NotFoundError` `trader_not_found`, `platform_user_not_found`; `ConflictError` `trade_feed_full` (300 traders); `RateLimitError` `rate_limited` (more than 120 changes of a user's Trade Feed in an hour; not retried).
+
+**Live stream** (async, needs `cabalspy-id[stream]`) and webhooks `trade_feed.trade` / `trade_feed.thesis` (`TRADE_FEED_WEBHOOK_EVENTS`) carry every new trade and thesis that concerns your users, once per event (not per user): `data` is the item plus `recipients` (csid_ids of your users whose filters let it through) and `recipients_external` (your own ids of those who are platform users).
+
+```python
+async with AsyncCabalSpyID() as csid:
+    async with csid.trade_feed_stream() as tf:
+        async for ev in tf:                       # {"event": "trade_feed.trade", "id": ..., "data": ...}
+            for user in ev["data"]["recipients_external"]:
+                await notify(user, ev["data"])
+```
+
+Events: `trade_feed.trade`, `trade_feed.thesis`, plus `ready`, `heartbeat`, `pong`, `open`, `close`, `reconnecting`, `error`. `invalid_api_key` is fatal; `too_many_connections` (at most 5 per key) reconnects with backoff. Events made while disconnected are not replayed: read the notifications or the feed to catch up.
+
+A full tour is in [`examples/trade_feed.py`](examples/trade_feed.py).
 
 ## Copy trading
 
@@ -608,7 +667,7 @@ The server sends a heartbeat every 30 seconds. The client reconnects with expone
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`). Callouts add `callout.created`, `callout.milestone`, `callout.scored`, `callout.final` (`data.callout`; `CALLOUT_WEBHOOK_EVENTS`). Copy trading adds `copy_trade.instruction` (one per user and copied trade; `data` is the instruction plus `external_id`; `COPY_TRADING_WEBHOOK_EVENTS`).
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`). Callouts add `callout.created`, `callout.milestone`, `callout.scored`, `callout.final` (`data.callout`; `CALLOUT_WEBHOOK_EVENTS`). Copy trading adds `copy_trade.instruction` (one per user and copied trade; `data` is the instruction plus `external_id`; `COPY_TRADING_WEBHOOK_EVENTS`). The Trade Feed adds `trade_feed.trade` and `trade_feed.thesis` (one per trade or thesis, not per user; `data` is the feed item plus `recipients` and `recipients_external`; `TradeFeedTradeEvent` / `TradeFeedThesisEvent`; `TRADE_FEED_WEBHOOK_EVENTS`).
 
 ```python
 from cabalspy_id import verify_webhook
@@ -632,6 +691,7 @@ CabalSpyID(
     stream_url="wss://api-id.cabalspy.xyz/v1/stream",
     callouts_stream_url="wss://api-id.cabalspy.xyz/v1/callouts/stream",
     copy_trading_stream_url="wss://api-id.cabalspy.xyz/v1/copy-trading/stream",
+    trade_feed_stream_url="wss://api-id.cabalspy.xyz/v1/trade-feed/stream",
     timeout=30.0,
     max_retries=2,
     headers={},

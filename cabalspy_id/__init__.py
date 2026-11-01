@@ -2,7 +2,8 @@
 
 Login with CabalSpy ID (OpenID Connect), the Data API for verified wallets, KOL
 badges, trading stats and token theses, white-label platform users, trading
-competitions, callouts, copy trading, the live stream, the public thesis API and webhook verification.
+competitions, callouts, copy trading, the Trade Feed, the live stream, the public thesis API and
+webhook verification.
 
     from cabalspy_id import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -49,6 +50,7 @@ from ._constants import (
     DEFAULT_THESES_STREAM_URL,
     DEFAULT_THESIS_URL,
     DEFAULT_THESIS_WS_URL,
+    DEFAULT_TRADE_FEED_STREAM_URL,
     FEATURE_CALLOUTS,
     INBOUND_FORMATS,
     LEADERBOARD_SORTS,
@@ -57,6 +59,8 @@ from ._constants import (
     MAX_OPEN_COMPETITIONS,
     MAX_REQUEST_BODY_BYTES,
     MAX_THESES_STREAM_TOKENS,
+    MAX_TRADE_FEED_STREAMS_PER_KEY,
+    MAX_TRADE_FEED_TRADERS,
     PERIODS,
     PLATFORM_IMPORT_MAX,
     PLATFORM_MAX_WALLETS_PER_REQUEST,
@@ -68,6 +72,11 @@ from ._constants import (
     THESIS_MAX_BODY,
     THESIS_REPORT_REASONS,
     THESIS_SCOPES,
+    TRADE_FEED_CHANGES_PER_HOUR,
+    TRADE_FEED_FILTERS,
+    TRADE_FEED_MAX_MIN_NATIVE,
+    TRADE_FEED_WEBHOOK_EVENTS,
+    TRADE_LABELS,
     WALLET_TRUST,
     WEBHOOK_EVENTS,
     CalloutCompetitionMetric,
@@ -102,6 +111,9 @@ from ._constants import (
     ThesisScope,
     ThesisSort,
     ThesisStance,
+    TradeFeedFilter,
+    TradeFeedItemType,
+    TradeLabel,
     TradingCompetitionMetric,
     VerificationStatus,
     WalletTrust,
@@ -246,6 +258,21 @@ from ._types import (
     TrackerResponse,
     TrackerTrade,
     Trade,
+    TradeFeedEvent,
+    TradeFeedItem,
+    TradeFeedMinNative,
+    TradeFeedNotification,
+    TradeFeedRemoveResult,
+    TradeFeedSettings,
+    TradeFeedStreamReady,
+    TradeFeedThesis,
+    TradeFeedThesisEvent,
+    TradeFeedThesisItem,
+    TradeFeedTrade,
+    TradeFeedTradeEvent,
+    TradeFeedTradeItem,
+    TradeFeedTrader,
+    TradeFeedTraderResult,
     TradeOwner,
     TraderProfile,
     VerifiedWallet,
@@ -282,6 +309,10 @@ def __getattr__(name: str) -> object:
         from . import _copy_trading_stream
 
         return getattr(_copy_trading_stream, name)
+    if name in ("TradeFeedStream", "TRADE_FEED_STREAM_EVENTS", "TRADE_FEED_EVENTS"):
+        from . import _trade_feed_stream
+
+        return getattr(_trade_feed_stream, name)
     raise AttributeError(f"module 'cabalspy_id' has no attribute {name!r}")
 
 
@@ -294,6 +325,7 @@ __all__ = [
     "ThesesStream",
     "CalloutsStream",
     "CopyTradingStream",
+    "TradeFeedStream",
     "Envelope",
     "CabalSpyIDAuth",
     "AsyncCabalSpyIDAuth",
@@ -553,4 +585,33 @@ __all__ = [
     "CopyLinks",
     "CopyInstruction",
     "CopyTradingStreamReady",
+    # trade feed
+    "TRADE_FEED_STREAM_EVENTS",
+    "TRADE_FEED_EVENTS",
+    "TRADE_FEED_WEBHOOK_EVENTS",
+    "TRADE_FEED_FILTERS",
+    "TRADE_LABELS",
+    "MAX_TRADE_FEED_TRADERS",
+    "TRADE_FEED_CHANGES_PER_HOUR",
+    "TRADE_FEED_MAX_MIN_NATIVE",
+    "MAX_TRADE_FEED_STREAMS_PER_KEY",
+    "DEFAULT_TRADE_FEED_STREAM_URL",
+    "TradeFeedFilter",
+    "TradeFeedItemType",
+    "TradeLabel",
+    "TradeFeedTrade",
+    "TradeFeedThesis",
+    "TradeFeedTradeItem",
+    "TradeFeedThesisItem",
+    "TradeFeedItem",
+    "TradeFeedMinNative",
+    "TradeFeedSettings",
+    "TradeFeedTrader",
+    "TradeFeedTraderResult",
+    "TradeFeedRemoveResult",
+    "TradeFeedNotification",
+    "TradeFeedTradeEvent",
+    "TradeFeedThesisEvent",
+    "TradeFeedEvent",
+    "TradeFeedStreamReady",
 ]
