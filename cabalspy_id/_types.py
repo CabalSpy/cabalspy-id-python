@@ -25,6 +25,10 @@ from ._constants import (
     CompetitionKind,
     CompetitionMetric,
     CompetitionStatus,
+    CopyInstructionStatus,
+    CopyMode,
+    CopySide,
+    CopySides,
     Currency,
     DataScope,
     LeaderboardSort,
@@ -1442,3 +1446,142 @@ class CalloutWebhookData(TypedDict, total=False):
     callout: Callout
     #: callout.milestone only.
     milestone_x: float
+
+
+# ── copy trading ─────────────────────────────────────────────────────────────
+
+
+class CopyTrader(TypedDict):
+    """A copied trader as everyone may see them. A platform's own (managed) users have
+    ``username`` and ``profile_url`` None."""
+
+    csid_id: str
+    username: str | None
+    name: str | None
+    image_url: str | None
+    kol: bool
+    profile_url: str | None
+
+
+class CopySettings(TypedDict):
+    """How one user copies one trader."""
+
+    enabled: bool
+    #: fixed_usd: every buy is ``amount_usd``; percent: ``percent`` % of the trader's buy.
+    mode: CopyMode
+    amount_usd: float
+    #: Percent of the trader's buy in USD (mode percent), above 0 and at most 1000.
+    percent: float
+    #: Cap per copied buy in USD; None = no cap.
+    max_usd: float | None
+    #: buys, or both (sells are copied as a share of the copied position).
+    sides: CopySides
+    #: Price limit sent with every instruction (1-5000, default 300 = 3 %).
+    slippage_bps: int
+    updated_at: str | None
+
+
+class CopyTradingSetting(TypedDict):
+    """GET/POST /v1/copy-trading/settings: one trader in the user's Trade Feed and the copy settings."""
+
+    trader: CopyTrader
+    copy: CopySettings
+    #: True while another platform copies this trader for this user (only that platform
+    #: gets the instructions; switching it on here raises ``copy_managed_elsewhere``).
+    managed_by_other_platform: bool
+
+
+class CopyAction(TypedDict):
+    """What to execute. Buys: ``amount_usd`` (and ``amount_native`` in ``currency``) with
+    ``max_price_usd`` as the price limit. Sells: ``sell_percent`` of the copied position
+    with ``min_price_usd`` as the price limit."""
+
+    blockchain: Chain
+    mint: str
+    symbol: str | None
+    name: str | None
+    logo: str | None
+    side: CopySide
+    #: Buys only.
+    amount_usd: float | None
+    #: Buys only, when known: the same amount in the chain's native currency.
+    amount_native: float | None
+    currency: Currency | None
+    #: Sells only: percent of the copied position to sell (100 = everything).
+    sell_percent: float | None
+    #: The trader's price.
+    price_usd: float | None
+    #: Buys: price_usd * (1 + slippage_bps / 10000).
+    max_price_usd: float | None
+    #: Sells: price_usd * (1 - slippage_bps / 10000).
+    min_price_usd: float | None
+    slippage_bps: int
+
+
+class CopySourceTrade(TypedDict, total=False):
+    """The trader's trade that was copied (as in the Trade Feed)."""
+
+    blockchain: Chain
+    mint: str
+    symbol: str | None
+    name: str | None
+    logo: str | None
+    side: CopySide
+    #: new, add, partial, close or sell.
+    label: str
+    #: partial sells: percent of the position the trader sold.
+    sold_percent: float | None
+    amount_native: float
+    currency: Currency | None
+    amount_usd: float | None
+    token_amount: float | None
+    price_usd: float | None
+    pnl_usd: float | None
+    pnl_percent: float | None
+    wallet: str
+    wallet_url: str | None
+    tx_signature: str
+    tx_url: str | None
+
+
+class CopyLinks(TypedDict, total=False):
+    token: str | None
+    terminal: str | None
+    profile: str | None
+
+
+class _CopyInstructionOptional(TypedDict, total=False):
+    #: Webhook and stream only: your platform's user id (white-label), else None.
+    external_id: str | None
+    # REST only (the webhook and the stream send the new, pending instruction without them):
+    #: As reported with the status.
+    tx_signature: str | None
+    executed_amount_usd: float | None
+    note: str | None
+    updated_at: str
+
+
+class CopyInstruction(_CopyInstructionOptional):
+    """A ready-to-execute copy instruction: execute ``action`` with the user's wallet, then
+    report the result with ``report_copy_instruction``. CabalSpy ID never holds keys and
+    never executes."""
+
+    id: str
+    type: Literal["copy_instruction"]
+    #: pending, executed, failed, skipped; ``expired`` = still pending after ``expires_at``.
+    status: CopyInstructionStatus
+    created_at: str
+    #: ``created_at`` + 120 seconds.
+    expires_at: str
+    #: The user to execute it for.
+    csid_id: str
+    trader: CopyTrader
+    action: CopyAction
+    source_trade: CopySourceTrade
+    #: The copy settings when the instruction was made.
+    settings: CopySettings
+    links: CopyLinks
+
+
+class CopyTradingStreamReady(TypedDict):
+    events: list[str]

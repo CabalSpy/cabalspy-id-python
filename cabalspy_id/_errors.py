@@ -98,6 +98,9 @@ class PermissionError_(CabalSpyIDError):
     Callouts: feature_not_enabled (callouts, and callout competitions, are switched on
     per instance on request), invalid_account, kol_only, not_a_holder, posting_paused,
     consent_required, sandbox_user.
+
+    Copy trading: consent_required (the user has not allowed your app the scope
+    trade_feed), trading_private.
     """
 
 
@@ -116,7 +119,8 @@ class PlanUserLimitError(PermissionError_):
 class NotFoundError(CabalSpyIDError):
     """404 — profile_not_found, wallet_not_found, instance_not_found; platform users:
     platform_user_not_found, verification_not_found, invalid_inbound_url;
-    competitions: competition_not_found; callouts: callout_not_found."""
+    competitions: competition_not_found; callouts: callout_not_found; copy trading:
+    trader_not_found, not_in_trade_feed, not_found (no such instruction for your instance)."""
 
 
 class ConflictError(CabalSpyIDError):
@@ -126,7 +130,9 @@ class ConflictError(CabalSpyIDError):
     wallet_already_verified, already_verified, kol_badge, x_required,
     kol_not_eligible, volume_check_unavailable. Competitions: competition_limit,
     competition_closed, competition_full, late_join_closed. Callouts: already_called
-    (the user called this token less than 24 hours ago).
+    (the user called this token less than 24 hours ago). Copy trading:
+    copy_managed_elsewhere (another platform copies this trader for the user),
+    already_reported (the instruction already has another final status), trade_feed_full.
     """
 
 

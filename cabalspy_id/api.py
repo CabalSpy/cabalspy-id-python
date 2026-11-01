@@ -1,7 +1,8 @@
 """``cabalspy_id.api`` — the SocialFi API: Data API clients (users, profiles,
 verified wallets, trading stats, leaderboards, white-label platform users,
-trading competitions and callouts), the live trade and callout streams, Login with CabalSpy ID (OpenID
-Connect) and webhook verification.
+trading competitions, callouts and copy trading), the live trade, callout and
+copy trading streams, Login with CabalSpy ID (OpenID Connect) and webhook
+verification.
 
     from cabalspy_id.api import CabalSpyID, CabalSpyIDAuth, verify_webhook
 
@@ -26,16 +27,26 @@ from cabalspy_id import (
     COMPETITION_METRICS,
     COMPETITION_STATUSES,
     COMPETITION_WEBHOOK_EVENTS,
+    COPY_DEFAULT_SLIPPAGE_BPS,
+    COPY_INSTRUCTION_STATUSES,
+    COPY_INSTRUCTION_TTL_SECONDS,
+    COPY_MIN_USD,
+    COPY_MODES,
+    COPY_REPORT_STATUSES,
+    COPY_SIDES,
+    COPY_TRADING_WEBHOOK_EVENTS,
     CURRENCY_BY_CHAIN,
     DATA_SCOPES,
     DEFAULT_BASE_URL,
     DEFAULT_CALLOUTS_STREAM_URL,
+    DEFAULT_COPY_TRADING_STREAM_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
     FEATURE_CALLOUTS,
     INBOUND_FORMATS,
     LEADERBOARD_SORTS,
     MAX_CALLOUT_STREAMS_PER_KEY,
+    MAX_COPY_TRADING_STREAMS_PER_KEY,
     MAX_OPEN_COMPETITIONS,
     MAX_REQUEST_BODY_BYTES,
     PERIODS,
@@ -99,6 +110,19 @@ from cabalspy_id import (
     CompetitionStandings,
     CompetitionStatus,
     ConflictError,
+    CopyAction,
+    CopyInstruction,
+    CopyInstructionStatus,
+    CopyLinks,
+    CopyMode,
+    CopyReportStatus,
+    CopySettings,
+    CopySide,
+    CopySides,
+    CopySourceTrade,
+    CopyTrader,
+    CopyTradingSetting,
+    CopyTradingStreamReady,
     Currency,
     DataScope,
     DiscoveryDocument,
@@ -417,14 +441,42 @@ __all__ = [
     "CalloutRemovedEvent",
     "CalloutsStreamReady",
     "CalloutWebhookData",
+    # copy trading
+    "CopyTradingStream",
+    "COPY_TRADING_STREAM_EVENTS",
+    "COPY_TRADING_EVENTS",
+    "COPY_TRADING_WEBHOOK_EVENTS",
+    "COPY_MODES",
+    "COPY_SIDES",
+    "COPY_INSTRUCTION_STATUSES",
+    "COPY_REPORT_STATUSES",
+    "COPY_INSTRUCTION_TTL_SECONDS",
+    "COPY_MIN_USD",
+    "COPY_DEFAULT_SLIPPAGE_BPS",
+    "MAX_COPY_TRADING_STREAMS_PER_KEY",
+    "DEFAULT_COPY_TRADING_STREAM_URL",
+    "CopyMode",
+    "CopySides",
+    "CopySide",
+    "CopyInstructionStatus",
+    "CopyReportStatus",
+    "CopyTrader",
+    "CopySettings",
+    "CopyTradingSetting",
+    "CopyAction",
+    "CopySourceTrade",
+    "CopyLinks",
+    "CopyInstruction",
+    "CopyTradingStreamReady",
 ]
 
 
 _LAZY_CALLOUTS = ("CalloutsStream", "CALLOUTS_STREAM_EVENTS", "CALLOUT_EVENTS")
+_LAZY_COPY_TRADING = ("CopyTradingStream", "COPY_TRADING_STREAM_EVENTS", "COPY_TRADING_EVENTS")
 
 
 def __getattr__(name: str) -> Any:
     # The stream needs the optional websockets dependency: loaded lazily, like the root package.
-    if name in ("CabalSpyIDStream", "STREAM_EVENTS", *_LAZY_CALLOUTS):
+    if name in ("CabalSpyIDStream", "STREAM_EVENTS", *_LAZY_CALLOUTS, *_LAZY_COPY_TRADING):
         return getattr(_root, name)
     raise AttributeError(f"module 'cabalspy_id.api' has no attribute {name!r}")

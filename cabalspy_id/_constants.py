@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.7.0"
+SDK_VERSION = "0.8.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -63,6 +63,9 @@ CALLOUT_WEBHOOK_EVENTS: tuple[str, ...] = (
     "callout.scored",
     "callout.final",
 )
+#: Webhook events about copy trading: one ``copy_trade.instruction`` per user and copied
+#: trade; ``data`` is the instruction plus ``external_id`` (white-label, else None).
+COPY_TRADING_WEBHOOK_EVENTS: tuple[str, ...] = ("copy_trade.instruction",)
 #: Webhook event types.
 WEBHOOK_EVENTS: tuple[str, ...] = (
     "wallet.verified",
@@ -77,6 +80,7 @@ WEBHOOK_EVENTS: tuple[str, ...] = (
     *PLATFORM_WEBHOOK_EVENTS,
     *COMPETITION_WEBHOOK_EVENTS,
     *CALLOUT_WEBHOOK_EVENTS,
+    *COPY_TRADING_WEBHOOK_EVENTS,
 )
 
 #: Reactions: "like" plus a fixed emoji set.
@@ -205,3 +209,30 @@ CALLOUT_MILESTONES: tuple[int, ...] = (2, 3, 5, 10, 20, 50, 100)
 CALLOUT_ACTIVE_MCAP_USD = 10_000
 #: Callout stream connections per API key.
 MAX_CALLOUT_STREAMS_PER_KEY = 5
+
+# ── copy trading ─────────────────────────────────────────────────────────────
+
+DEFAULT_COPY_TRADING_STREAM_URL = "wss://api-id.cabalspy.xyz/v1/copy-trading/stream"
+#: fixed_usd: every copied buy is ``amount_usd``; percent: ``percent`` % of the trader's buy (in USD).
+CopyMode = Literal["fixed_usd", "percent"]
+COPY_MODES: tuple[CopyMode, ...] = ("fixed_usd", "percent")
+#: buys: only buys are copied; both: sells too (as "sell X % of the copied position").
+CopySides = Literal["buys", "both"]
+COPY_SIDES: tuple[CopySides, ...] = ("buys", "both")
+#: An instruction's status. ``expired``: still pending after ``expires_at`` (it may still be
+#: reported as executed).
+CopyInstructionStatus = Literal["pending", "executed", "failed", "skipped", "expired"]
+COPY_INSTRUCTION_STATUSES: tuple[CopyInstructionStatus, ...] = ("pending", "executed", "failed", "skipped", "expired")
+#: The statuses your app reports back (final; the same report twice is fine).
+CopyReportStatus = Literal["executed", "failed", "skipped"]
+COPY_REPORT_STATUSES: tuple[CopyReportStatus, ...] = ("executed", "failed", "skipped")
+#: buy or sell.
+CopySide = Literal["buy", "sell"]
+#: Seconds an instruction is meant to be executed in (``expires_at`` - ``created_at``).
+COPY_INSTRUCTION_TTL_SECONDS = 120
+#: Copied buys below this many USD are not sent.
+COPY_MIN_USD = 1.0
+#: Default price limit of the instructions in basis points (3 %).
+COPY_DEFAULT_SLIPPAGE_BPS = 300
+#: Copy trading stream connections per API key.
+MAX_COPY_TRADING_STREAMS_PER_KEY = 5

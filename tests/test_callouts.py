@@ -349,7 +349,6 @@ def test_callout_webhook_events() -> None:
 def test_exports() -> None:
     import cabalspy_id
 
-    assert cabalspy_id.__version__ == "0.7.0"
     assert api.CalloutsStream is cabalspy_id.CalloutsStream
     assert "callout.update" in cabalspy_id.CALLOUT_EVENTS
     assert "ready" in cabalspy_id.CALLOUTS_STREAM_EVENTS

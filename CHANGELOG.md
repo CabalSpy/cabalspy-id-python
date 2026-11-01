@@ -4,6 +4,40 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-11-01
+
+Copy trading: every trade of a trader one of your users copies becomes a ready-to-execute
+instruction for that user, sized by their copy settings. CabalSpy ID never holds keys and never
+executes; your app executes the instruction with the user's wallet and reports the status back.
+Sync and async.
+
+### Added
+
+- Copy trading (`/v1/copy-trading/*`) on `CabalSpyID` and `AsyncCabalSpyID`:
+  `copy_trading_settings` (`external_id` positionally or `csid_id=`; all traders, or one with
+  `trader=` / `trader_external_id=`), `update_copy_trading_settings` (`enabled`, `mode`,
+  `amount_usd`, `percent`, `max_usd` (`None` removes the cap), `sides`, `slippage_bps`; only the
+  settings you pass change), `copy_instructions` / `iter_copy_instructions` (filters
+  `external_id` / `csid_id`, `status` incl. `expired`; `limit` 1-100), `copy_instruction`,
+  `report_copy_instruction` (`executed` / `failed` / `skipped`, `tx_signature`,
+  `executed_amount_usd`, `note`). Values are checked locally like the server does.
+- `CopyTradingStream` for `wss://api-id.cabalspy.xyz/v1/copy-trading/stream` via
+  `client.copy_trading_stream()`: event `copy_trade.instruction` (handlers, or `async for` with
+  `{"event", "id", "data"}`), heartbeats, reconnects with backoff; `invalid_api_key` is fatal,
+  `too_many_connections` reconnects. New client option `copy_trading_stream_url`.
+- Types: `CopyInstruction`, `CopyAction`, `CopySourceTrade`, `CopyLinks`, `CopyTrader`,
+  `CopySettings`, `CopyTradingSetting`, `CopyTradingStreamReady`.
+- Constants: `COPY_TRADING_WEBHOOK_EVENTS` (`copy_trade.instruction`, also in `WEBHOOK_EVENTS`),
+  `COPY_MODES`, `COPY_SIDES`, `COPY_INSTRUCTION_STATUSES`, `COPY_REPORT_STATUSES`,
+  `COPY_INSTRUCTION_TTL_SECONDS`, `COPY_MIN_USD`, `COPY_DEFAULT_SLIPPAGE_BPS`,
+  `MAX_COPY_TRADING_STREAMS_PER_KEY`, `DEFAULT_COPY_TRADING_STREAM_URL`, `COPY_TRADING_EVENTS`,
+  `COPY_TRADING_STREAM_EVENTS`; Literal types `CopyMode`, `CopySides`, `CopySide`,
+  `CopyInstructionStatus`, `CopyReportStatus`.
+- Error codes on the existing classes: `copy_managed_elsewhere`, `already_reported`,
+  `trade_feed_full` (`ConflictError`), `not_in_trade_feed`, `trader_not_found`, `not_found`
+  (`NotFoundError`), `consent_required`, `trading_private` (`PermissionError`).
+- README section "Copy trading" and `examples/copy_trading.py`.
+
 ## [0.7.0] - 2026-10-31
 
 Callouts: your users call tokens, and every call is stamped with the token's price and market
@@ -231,6 +265,7 @@ First release.
   `NotFoundError`, `RateLimitError`, `ServerError`, `APIConnectionError`,
   `InvalidResponseError`, `OAuthError`, `TokenVerificationError`, `WebhookVerificationError`.
 
+[0.8.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/CabalSpy/cabalspy-id-python/compare/v0.5.1...v0.5.2
