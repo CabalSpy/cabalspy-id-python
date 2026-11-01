@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.8.0"
+SDK_VERSION = "0.9.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -66,6 +66,10 @@ CALLOUT_WEBHOOK_EVENTS: tuple[str, ...] = (
 #: Webhook events about copy trading: one ``copy_trade.instruction`` per user and copied
 #: trade; ``data`` is the instruction plus ``external_id`` (white-label, else None).
 COPY_TRADING_WEBHOOK_EVENTS: tuple[str, ...] = ("copy_trade.instruction",)
+#: Webhook events about the Trade Feed: one per trade or thesis of a trader in your users'
+#: Trade Feeds (not one per user); ``data`` is the feed item plus ``recipients`` (csid_ids)
+#: and ``recipients_external`` (your external_ids).
+TRADE_FEED_WEBHOOK_EVENTS: tuple[str, ...] = ("trade_feed.trade", "trade_feed.thesis")
 #: Webhook event types.
 WEBHOOK_EVENTS: tuple[str, ...] = (
     "wallet.verified",
@@ -81,6 +85,7 @@ WEBHOOK_EVENTS: tuple[str, ...] = (
     *COMPETITION_WEBHOOK_EVENTS,
     *CALLOUT_WEBHOOK_EVENTS,
     *COPY_TRADING_WEBHOOK_EVENTS,
+    *TRADE_FEED_WEBHOOK_EVENTS,
 )
 
 #: Reactions: "like" plus a fixed emoji set.
@@ -236,3 +241,24 @@ COPY_MIN_USD = 1.0
 COPY_DEFAULT_SLIPPAGE_BPS = 300
 #: Copy trading stream connections per API key.
 MAX_COPY_TRADING_STREAMS_PER_KEY = 5
+
+# ── trade feed ───────────────────────────────────────────────────────────────
+
+DEFAULT_TRADE_FEED_STREAM_URL = "wss://api-id.cabalspy.xyz/v1/trade-feed/stream"
+#: all: trades and theses; buys / sells: only those trades; theses: only theses.
+TradeFeedFilter = Literal["all", "buys", "sells", "theses"]
+TRADE_FEED_FILTERS: tuple[TradeFeedFilter, ...] = ("all", "buys", "sells", "theses")
+#: A feed item's type.
+TradeFeedItemType = Literal["trade", "thesis"]
+#: What a trade did to the trader's position: new (first buy), add (bought more), partial
+#: (sold part, see ``sold_percent``), close (sold everything), sell (a sell without a known buy).
+TradeLabel = Literal["new", "add", "partial", "close", "sell"]
+TRADE_LABELS: tuple[TradeLabel, ...] = ("new", "add", "partial", "close", "sell")
+#: Traders per Trade Feed.
+MAX_TRADE_FEED_TRADERS = 300
+#: Changes (adding traders) per user and hour; more raise RateLimitError ``rate_limited``.
+TRADE_FEED_CHANGES_PER_HOUR = 120
+#: Upper bound of ``min_sol`` / ``min_bnb`` / ``min_eth`` (0 = every trade).
+TRADE_FEED_MAX_MIN_NATIVE = 1_000_000
+#: Trade Feed stream connections per API key.
+MAX_TRADE_FEED_STREAMS_PER_KEY = 5

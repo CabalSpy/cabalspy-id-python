@@ -1,7 +1,7 @@
 """``cabalspy_id.api`` — the SocialFi API: Data API clients (users, profiles,
 verified wallets, trading stats, leaderboards, white-label platform users,
-trading competitions, callouts and copy trading), the live trade, callout and
-copy trading streams, Login with CabalSpy ID (OpenID Connect) and webhook
+trading competitions, callouts, copy trading and the Trade Feed), the live trade,
+callout, copy trading and Trade Feed streams, Login with CabalSpy ID (OpenID Connect) and webhook
 verification.
 
     from cabalspy_id.api import CabalSpyID, CabalSpyIDAuth, verify_webhook
@@ -42,6 +42,7 @@ from cabalspy_id import (
     DEFAULT_COPY_TRADING_STREAM_URL,
     DEFAULT_ISSUER,
     DEFAULT_STREAM_URL,
+    DEFAULT_TRADE_FEED_STREAM_URL,
     FEATURE_CALLOUTS,
     INBOUND_FORMATS,
     LEADERBOARD_SORTS,
@@ -49,6 +50,8 @@ from cabalspy_id import (
     MAX_COPY_TRADING_STREAMS_PER_KEY,
     MAX_OPEN_COMPETITIONS,
     MAX_REQUEST_BODY_BYTES,
+    MAX_TRADE_FEED_STREAMS_PER_KEY,
+    MAX_TRADE_FEED_TRADERS,
     PERIODS,
     PLATFORM_IMPORT_MAX,
     PLATFORM_MAX_WALLETS_PER_REQUEST,
@@ -56,6 +59,11 @@ from cabalspy_id import (
     SCOPES,
     SDK_VERSION,
     STREAM_TOPICS,
+    TRADE_FEED_CHANGES_PER_HOUR,
+    TRADE_FEED_FILTERS,
+    TRADE_FEED_MAX_MIN_NATIVE,
+    TRADE_FEED_WEBHOOK_EVENTS,
+    TRADE_LABELS,
     WALLET_TRUST,
     WEBHOOK_EVENTS,
     ActiveHoldings,
@@ -209,6 +217,24 @@ from cabalspy_id import (
     TrackerResponse,
     TrackerTrade,
     Trade,
+    TradeFeedEvent,
+    TradeFeedFilter,
+    TradeFeedItem,
+    TradeFeedItemType,
+    TradeFeedMinNative,
+    TradeFeedNotification,
+    TradeFeedRemoveResult,
+    TradeFeedSettings,
+    TradeFeedStreamReady,
+    TradeFeedThesis,
+    TradeFeedThesisEvent,
+    TradeFeedThesisItem,
+    TradeFeedTrade,
+    TradeFeedTradeEvent,
+    TradeFeedTradeItem,
+    TradeFeedTrader,
+    TradeFeedTraderResult,
+    TradeLabel,
     TradeOwner,
     TraderProfile,
     TradingCompetitionMetric,
@@ -468,15 +494,46 @@ __all__ = [
     "CopyLinks",
     "CopyInstruction",
     "CopyTradingStreamReady",
+    # trade feed
+    "TradeFeedStream",
+    "TRADE_FEED_STREAM_EVENTS",
+    "TRADE_FEED_EVENTS",
+    "TRADE_FEED_WEBHOOK_EVENTS",
+    "TRADE_FEED_FILTERS",
+    "TRADE_LABELS",
+    "MAX_TRADE_FEED_TRADERS",
+    "TRADE_FEED_CHANGES_PER_HOUR",
+    "TRADE_FEED_MAX_MIN_NATIVE",
+    "MAX_TRADE_FEED_STREAMS_PER_KEY",
+    "DEFAULT_TRADE_FEED_STREAM_URL",
+    "TradeFeedFilter",
+    "TradeFeedItemType",
+    "TradeLabel",
+    "TradeFeedTrade",
+    "TradeFeedThesis",
+    "TradeFeedTradeItem",
+    "TradeFeedThesisItem",
+    "TradeFeedItem",
+    "TradeFeedMinNative",
+    "TradeFeedSettings",
+    "TradeFeedTrader",
+    "TradeFeedTraderResult",
+    "TradeFeedRemoveResult",
+    "TradeFeedNotification",
+    "TradeFeedTradeEvent",
+    "TradeFeedThesisEvent",
+    "TradeFeedEvent",
+    "TradeFeedStreamReady",
 ]
 
 
 _LAZY_CALLOUTS = ("CalloutsStream", "CALLOUTS_STREAM_EVENTS", "CALLOUT_EVENTS")
 _LAZY_COPY_TRADING = ("CopyTradingStream", "COPY_TRADING_STREAM_EVENTS", "COPY_TRADING_EVENTS")
+_LAZY_TRADE_FEED = ("TradeFeedStream", "TRADE_FEED_STREAM_EVENTS", "TRADE_FEED_EVENTS")
 
 
 def __getattr__(name: str) -> Any:
     # The stream needs the optional websockets dependency: loaded lazily, like the root package.
-    if name in ("CabalSpyIDStream", "STREAM_EVENTS", *_LAZY_CALLOUTS, *_LAZY_COPY_TRADING):
+    if name in ("CabalSpyIDStream", "STREAM_EVENTS", *_LAZY_CALLOUTS, *_LAZY_COPY_TRADING, *_LAZY_TRADE_FEED):
         return getattr(_root, name)
     raise AttributeError(f"module 'cabalspy_id.api' has no attribute {name!r}")

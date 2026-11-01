@@ -42,7 +42,9 @@ from ._constants import (
     DEFAULT_COPY_TRADING_STREAM_URL,
     DEFAULT_STREAM_URL,
     DEFAULT_THESES_STREAM_URL,
+    DEFAULT_TRADE_FEED_STREAM_URL,
     LEADERBOARD_SORTS,
+    MAX_TRADE_FEED_TRADERS,
     PERIODS,
     PLATFORM_IMPORT_MAX,
     PLATFORM_MAX_WALLETS_PER_REQUEST,
@@ -50,6 +52,8 @@ from ._constants import (
     THESIS_EMOJIS,
     THESIS_REPORT_REASONS,
     THESIS_SCOPES,
+    TRADE_FEED_FILTERS,
+    TRADE_FEED_MAX_MIN_NATIVE,
     USER_AGENT,
     WALLET_TRUST,
     CalloutSort,
@@ -75,6 +79,7 @@ from ._constants import (
     ThesisScope,
     ThesisSort,
     ThesisStance,
+    TradeFeedFilter,
     WalletTrust,
 )
 from ._errors import (
@@ -96,6 +101,7 @@ if TYPE_CHECKING:
     from ._copy_trading_stream import CopyTradingStream
     from ._stream import CabalSpyIDStream
     from ._theses_stream import ThesesStream
+    from ._trade_feed_stream import TradeFeedStream
 
 _T = TypeVar("_T")
 
@@ -436,6 +442,41 @@ def _copy_instructions_query(external_id: Any, csid_id: Any, status: Any, limit:
             "limit must be a whole number from 1 to 100.", code="invalid_parameter", parameter="limit"
         )
     return {"external_id": external_id, "csid_id": csid_id, "status": status, "limit": limit, "cursor": cursor}
+
+
+def _limit(limit: Any, high: int) -> None:
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= high):
+        raise BadRequestError(
+            f"limit must be a whole number from 1 to {high}.", code="invalid_parameter", parameter="limit"
+        )
+
+
+def _trade_feed_query(
+    external_id: Any, csid_id: Any, limit: Any, cursor: Any, *, max_limit: int = 100, **extra: Any
+) -> dict[str, Any]:
+    """A Trade Feed read: exactly one user, ``limit`` 1-``max_limit``."""
+    who = _who(external_id, csid_id)
+    _limit(limit, max_limit)
+    return {**who, **extra, "limit": limit, "cursor": cursor}
+
+
+def _trade_feed_settings(**fields: Any) -> dict[str, Any]:
+    """Alert settings for one trader; None = not sent (unchanged, or the user's defaults)."""
+    out = {k: v for k, v in fields.items() if v is not None}
+    for k in ("notify_buys", "notify_sells", "notify_theses", "muted"):
+        if k in out and not isinstance(out[k], bool):
+            raise BadRequestError(f"{k} must be True or False.", code="invalid_parameter", parameter=k)
+    for k in ("min_sol", "min_bnb", "min_eth"):
+        v = out.get(k)
+        if k in out and (
+            isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= TRADE_FEED_MAX_MIN_NATIVE
+        ):
+            raise BadRequestError(
+                f"{k} must be a number from 0 to {TRADE_FEED_MAX_MIN_NATIVE:,} (0 = every trade).",
+                code="invalid_parameter",
+                parameter=k,
+            )
+    return out
 
 
 def _import_items(users: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1646,6 +1687,129 @@ class _Endpoints:
             body["note"] = note
         return self._post("/copy-trading/instructions/status", body)
 
+    # ── trade feed ───────────────────────────────────────────────────────
+    # A user's Trade Feed: the traders they follow, every trade and thesis of them,
+    # alerts and the copy settings. Everything acts in the name of one user (positional
+    # ``external_id`` for a platform user, or ``csid_id=``) who signed in to your app with
+    # the scope trade_feed (else PermissionError consent_required) and is within your
+    # plan's user limit (an ``anon_`` id raises PlanUserLimitError plan_user_limit). An
+    # unknown external_id raises NotFoundError platform_user_not_found.
+
+    def trade_feed(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        filter: TradeFeedFilter | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/trade-feed — the user's Trade Feed, newest first: every trade and thesis
+        of the traders in it (traders who keep their trading private are left out).
+
+        ``filter``: all (default), buys, sells or theses; ``limit`` 1-100 (default 30).
+        Returns a list of :data:`~cabalspy_id.TradeFeedItem` (``type`` trade or thesis);
+        see ``iter_trade_feed``.
+        """
+        _one_of(filter, TRADE_FEED_FILTERS, "filter")
+        return self._get("/trade-feed", _trade_feed_query(external_id, csid_id, limit, cursor, filter=filter))
+
+    def trade_feed_traders(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/trade-feed/traders — the traders in the user's Trade Feed, most recently
+        added first, with the user's alert and copy settings for each (``limit`` 1-300,
+        default 100). The envelope's pagination (``get_raw``) has ``total`` and ``max`` (300).
+
+        Returns a list of :class:`~cabalspy_id.TradeFeedTrader`; see ``iter_trade_feed_traders``.
+        """
+        return self._get(
+            "/trade-feed/traders",
+            _trade_feed_query(external_id, csid_id, limit, cursor, max_limit=MAX_TRADE_FEED_TRADERS),
+        )
+
+    def add_trade_feed_trader(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        trader: str | None = None,
+        trader_external_id: str | None = None,
+        notify_buys: bool | None = None,
+        notify_sells: bool | None = None,
+        notify_theses: bool | None = None,
+        min_sol: float | None = None,
+        min_bnb: float | None = None,
+        min_eth: float | None = None,
+        muted: bool | None = None,
+    ) -> Any:
+        """POST /v1/trade-feed/traders — adds a trader (handle with or without @, or csid_id;
+        ``trader_external_id`` for one of your platform users) to the user's Trade Feed, with
+        the user's default alert settings unless you pass others. When the trader is already
+        there, the settings you pass are updated (None = unchanged).
+
+        ``min_sol`` / ``min_bnb`` / ``min_eth``: minimum trade size for alerts, 0-1,000,000
+        (0 = every trade); ``muted``: no alerts for this trader.
+
+        Returns :class:`~cabalspy_id.TradeFeedTraderResult` (``created`` True and HTTP 201
+        when the trader was added). Raises BadRequestError ``cannot_add_self``,
+        PermissionError ``trading_private``, NotFoundError ``trader_not_found``,
+        ConflictError ``trade_feed_full`` (300 traders) and RateLimitError ``rate_limited``
+        (more than 120 changes in an hour; not retried).
+        """
+        who = _who(external_id, csid_id)
+        target = _copy_trader(trader, trader_external_id, required=True)
+        settings = _trade_feed_settings(
+            notify_buys=notify_buys,
+            notify_sells=notify_sells,
+            notify_theses=notify_theses,
+            min_sol=min_sol,
+            min_bnb=min_bnb,
+            min_eth=min_eth,
+            muted=muted,
+        )
+        return self._post("/trade-feed/traders", {**who, **target, **settings})
+
+    def remove_trade_feed_trader(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        trader: str | None = None,
+        trader_external_id: str | None = None,
+    ) -> Any:
+        """POST /v1/trade-feed/traders/delete — removes a trader from the user's Trade Feed;
+        this also ends copying of that trader.
+
+        Returns :class:`~cabalspy_id.TradeFeedRemoveResult` (``removed`` False when the
+        trader was not in the Trade Feed).
+        """
+        who = _who(external_id, csid_id)
+        target = _copy_trader(trader, trader_external_id, required=True)
+        return self._post("/trade-feed/traders/delete", {**who, **target})
+
+    def trade_feed_notifications(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> Any:
+        """GET /v1/trade-feed/notifications — the user's recent Trade Feed alerts, newest
+        first: every trade and thesis that passed the user's filters for that trader
+        (``limit`` 1-100, default 50). For an alert inbox without webhooks.
+
+        Returns a list of :class:`~cabalspy_id.TradeFeedNotification`; see
+        ``iter_trade_feed_notifications``.
+        """
+        return self._get("/trade-feed/notifications", _trade_feed_query(external_id, csid_id, limit, cursor))
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIENTS
@@ -1663,6 +1827,7 @@ class _BaseClient(_Endpoints):
         theses_stream_url: str | None = None,
         callouts_stream_url: str | None = None,
         copy_trading_stream_url: str | None = None,
+        trade_feed_stream_url: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 2,
         headers: Mapping[str, str] | None = None,
@@ -1677,6 +1842,7 @@ class _BaseClient(_Endpoints):
         self.theses_stream_url = (theses_stream_url or DEFAULT_THESES_STREAM_URL).rstrip("/")
         self.callouts_stream_url = (callouts_stream_url or DEFAULT_CALLOUTS_STREAM_URL).rstrip("/")
         self.copy_trading_stream_url = (copy_trading_stream_url or DEFAULT_COPY_TRADING_STREAM_URL).rstrip("/")
+        self.trade_feed_stream_url = (trade_feed_stream_url or DEFAULT_TRADE_FEED_STREAM_URL).rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self._extra_headers = dict(headers or {})
@@ -1824,6 +1990,19 @@ class _BaseClient(_Endpoints):
         from ._copy_trading_stream import CopyTradingStream
 
         return CopyTradingStream(self.copy_trading_stream_url, self._api_key, instance=self.instance, **kwargs)
+
+    def trade_feed_stream(self, **kwargs: Any) -> TradeFeedStream:
+        """Every new trade and thesis that concerns your users, live (``trade_feed.trade``,
+        ``trade_feed.thesis``; ``data`` adds ``recipients`` and ``recipients_external``).
+        Async only.
+
+        Needs the ``stream`` extra: ``pip install "cabalspy-id[stream]"``.
+        """
+        if not self._api_key:
+            raise AuthenticationError("The Trade Feed stream needs an API key.", status=401, code="missing_api_key")
+        from ._trade_feed_stream import TradeFeedStream
+
+        return TradeFeedStream(self.trade_feed_stream_url, self._api_key, instance=self.instance, **kwargs)
 
 
 class CabalSpyID(_BaseClient):
@@ -2118,6 +2297,36 @@ class CabalSpyID(_BaseClient):
         for page in self.pages("/copy-trading/instructions", query):
             yield from page.data
 
+    # ── trade feed ───────────────────────────────────────────────────────
+
+    def iter_trade_feed(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        filter: TradeFeedFilter | None = None,
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Every item of the user's Trade Feed, newest first, following ``next_cursor``."""
+        _one_of(filter, TRADE_FEED_FILTERS, "filter")
+        for page in self.pages("/trade-feed", _trade_feed_query(external_id, csid_id, limit, None, filter=filter)):
+            yield from page.data
+
+    def iter_trade_feed_traders(
+        self, external_id: str | None = None, *, csid_id: str | None = None, limit: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Every trader in the user's Trade Feed, most recently added first, following ``next_cursor``."""
+        query = _trade_feed_query(external_id, csid_id, limit, None, max_limit=MAX_TRADE_FEED_TRADERS)
+        for page in self.pages("/trade-feed/traders", query):
+            yield from page.data
+
+    def iter_trade_feed_notifications(
+        self, external_id: str | None = None, *, csid_id: str | None = None, limit: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Every Trade Feed alert of the user, newest first, following ``next_cursor``."""
+        for page in self.pages("/trade-feed/notifications", _trade_feed_query(external_id, csid_id, limit, None)):
+            yield from page.data
+
 
 class AsyncCabalSpyID(_BaseClient):
     """Asynchronous Data API client.
@@ -2406,6 +2615,41 @@ class AsyncCabalSpyID(_BaseClient):
         """Every copy instruction matching the filters, newest first, following ``next_cursor``."""
         query = _copy_instructions_query(external_id, csid_id, status, limit, None)
         async for page in self.pages("/copy-trading/instructions", query):
+            for item in page.data:
+                yield item
+
+    # ── trade feed ───────────────────────────────────────────────────────
+
+    async def iter_trade_feed(
+        self,
+        external_id: str | None = None,
+        *,
+        csid_id: str | None = None,
+        filter: TradeFeedFilter | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every item of the user's Trade Feed, newest first, following ``next_cursor``."""
+        _one_of(filter, TRADE_FEED_FILTERS, "filter")
+        query = _trade_feed_query(external_id, csid_id, limit, None, filter=filter)
+        async for page in self.pages("/trade-feed", query):
+            for item in page.data:
+                yield item
+
+    async def iter_trade_feed_traders(
+        self, external_id: str | None = None, *, csid_id: str | None = None, limit: int | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every trader in the user's Trade Feed, most recently added first, following ``next_cursor``."""
+        query = _trade_feed_query(external_id, csid_id, limit, None, max_limit=MAX_TRADE_FEED_TRADERS)
+        async for page in self.pages("/trade-feed/traders", query):
+            for item in page.data:
+                yield item
+
+    async def iter_trade_feed_notifications(
+        self, external_id: str | None = None, *, csid_id: str | None = None, limit: int | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Every Trade Feed alert of the user, newest first, following ``next_cursor``."""
+        query = _trade_feed_query(external_id, csid_id, limit, None)
+        async for page in self.pages("/trade-feed/notifications", query):
             for item in page.data:
                 yield item
 

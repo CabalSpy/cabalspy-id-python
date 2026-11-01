@@ -80,7 +80,8 @@ class CabalSpyIDError(Exception):
 
 class BadRequestError(CabalSpyIDError):
     """400 — missing_parameter, invalid_parameter, instance_required; platform users:
-    wallet_required, invalid_address, invalid_return_url, invalid_body.
+    wallet_required, invalid_address, invalid_return_url, invalid_body; Trade Feed:
+    cannot_add_self (the user tried to add themselves).
 
     Also 422 — callouts: no_price (the token has no market price yet, so a callout
     could not be tracked). ``status`` keeps the real HTTP status.
@@ -99,8 +100,9 @@ class PermissionError_(CabalSpyIDError):
     per instance on request), invalid_account, kol_only, not_a_holder, posting_paused,
     consent_required, sandbox_user.
 
-    Copy trading: consent_required (the user has not allowed your app the scope
-    trade_feed), trading_private.
+    Copy trading and Trade Feed: consent_required (the user has not allowed your app
+    the scope trade_feed, or is beyond the plan's user limit), trading_private (the
+    trader keeps their trading private).
     """
 
 
@@ -120,7 +122,9 @@ class NotFoundError(CabalSpyIDError):
     """404 — profile_not_found, wallet_not_found, instance_not_found; platform users:
     platform_user_not_found, verification_not_found, invalid_inbound_url;
     competitions: competition_not_found; callouts: callout_not_found; copy trading:
-    trader_not_found, not_in_trade_feed, not_found (no such instruction for your instance)."""
+    trader_not_found, not_in_trade_feed, not_found (no such instruction for your instance);
+    Trade Feed: trader_not_found, platform_user_not_found (unknown external_id or
+    trader_external_id)."""
 
 
 class ConflictError(CabalSpyIDError):
@@ -133,6 +137,7 @@ class ConflictError(CabalSpyIDError):
     (the user called this token less than 24 hours ago). Copy trading:
     copy_managed_elsewhere (another platform copies this trader for the user),
     already_reported (the instruction already has another final status), trade_feed_full.
+    Trade Feed: trade_feed_full (the Trade Feed has the maximum of 300 traders).
     """
 
 
@@ -141,7 +146,8 @@ class RateLimitError(CabalSpyIDError):
     platform users: rate_limited (new users or inbound events per minute),
     too_many_open_verifications; callouts: callout_cooldown (the instance's cooldown
     between two callouts of a user; ``retry_after`` can be hours, so it is never
-    retried automatically); streams: too_many_connections."""
+    retried automatically); Trade Feed: rate_limited (more than 120 changes of a
+    user's Trade Feed in an hour; not retried); streams: too_many_connections."""
 
     def __init__(self, message: str, *, retry_after: float | None = None, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)

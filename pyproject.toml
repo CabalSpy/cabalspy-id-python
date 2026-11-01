@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cabalspy-id"
-version = "0.8.0"
+version = "0.9.0"
 description = "SocialFi API & SDK for CabalSpy ID — add a social layer to any app: login with X + verified wallets, live trades and PnL of your users, token theses, leaderboards and copy trading on Solana, BNB Chain, Base, Ethereum and Robinhood Chain."
 readme = "README.md"
 license = "MIT"
