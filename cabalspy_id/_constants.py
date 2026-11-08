@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-SDK_VERSION = "0.9.1"
+SDK_VERSION = "0.10.0"
 USER_AGENT = f"cabalspy-id-python/{SDK_VERSION}"
 
 DEFAULT_BASE_URL = "https://api-id.cabalspy.xyz/v1"
@@ -43,8 +43,11 @@ CURRENCY_BY_CHAIN: dict[Chain, Currency] = {
 #: Webhook events about platform users (white-label). ``data.sub`` is the user's csid_id.
 PLATFORM_WEBHOOK_EVENTS: tuple[str, ...] = (
     "platform_user.created",
+    "platform_user.merged",
+    "platform_user.self_managed",
     "platform_user.claimed",
     "platform_user.x_connected",
+    "platform_user.telegram_linked",
     "wallet.added",
     "verification.expired",
 )

@@ -1206,11 +1206,11 @@ class _Endpoints:
     def platform_user_claim_link(
         self, external_id: str | None = None, *, return_url: str | None = None, csid_id: str | None = None
     ) -> Any:
-        """POST /v1/platform-users/claim-link — a 24-hour link that lets the person take the account
-        into their own CabalSpy ID. ``return_url`` must be on your verified domains or registered
-        origins. Off with ``white_label`` unless ``claim_links`` is on (``claim_disabled``).
+        """Deprecated: claim links are gone, the API answers 410 ``claim_removed``.
 
-        Returns :class:`~cabalspy_id.PlatformClaimLink`.
+        A CabalSpy ID is one account for every platform now: your link moves to the person's
+        own ID by itself when they connect X or Telegram or verify a wallet it holds (webhook
+        ``platform_user.merged``; your ``external_id`` stays).
         """
         body = _who(external_id, csid_id)
         if return_url:

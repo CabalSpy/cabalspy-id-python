@@ -858,10 +858,17 @@ class PlatformUser(TypedDict):
 
     csid_id: str
     external_id: str
-    #: True once the person took the account into their own CabalSpy ID (claim link).
+    #: The person signs in to their CabalSpy ID themselves and manages profile, X and
+    #: Telegram; you can still report wallets for them.
+    self_managed: bool
+    self_managed_at: str | None
+    #: Deprecated: old names of ``self_managed`` / ``self_managed_at``.
     claimed: bool
     claimed_at: str | None
+    #: Created by a platform and not taken over by the person yet.
     managed: bool
+    #: The platform account this link moved from when the person proved their own CabalSpy ID.
+    merged_from: str | None
     display_name: str | None
     avatar_url: str | None
     #: Beyond the plan's user limit: no data until the platform upgrades.
