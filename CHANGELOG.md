@@ -4,6 +4,20 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-11-08
+
+### Fixed
+
+- Theses in the name of a platform user: `thesis_eligibility`, `post_thesis`, `reply_to_thesis`,
+  `react_to_thesis`, `report_thesis`, `delete_thesis`, `thesis_notifications` and
+  `appeal_thesis_decision` take `external_id=` in place of `csid_id` (they accepted only
+  `csid_id` before). Exactly one of the two.
+
+### Added
+
+- `history(mint=)`: only the trades of one token, for example to mark a user's buys and sells on
+  a price chart. History trades carry `token_amount` and `price_usd`.
+
 ## [0.9.0] - 2026-11-01
 
 Trade Feed: read and manage your users' Trade Feeds from your backend (the traders they follow,
