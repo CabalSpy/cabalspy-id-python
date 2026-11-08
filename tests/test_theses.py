@@ -147,6 +147,41 @@ def test_writes_post_json_with_instance() -> None:
     assert rec.requests[0].headers["content-type"] == "application/json"
 
 
+def test_platform_user_writes_by_external_id() -> None:
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/reactions"):
+            return ok({"id": "t1", "reactions": {"like": 1}})
+        if r.url.path.endswith("/eligibility"):
+            return ok({"can_post": True, "can_reply": True, "holder": True, "paused": False})
+        if r.url.path.endswith("/notifications"):
+            return ok({"unread": 0, "items": []})
+        return ok(thesis())
+
+    csid, rec = make(handler)
+    csid.thesis_eligibility(blockchain="solana", mint=MINT, external_id="user_1")
+    csid.post_thesis(blockchain="solana", mint=MINT, body="gm", external_id="user_1")
+    csid.reply_to_thesis(thesis_id="t1", body="Nice call", external_id="user_2")
+    csid.react_to_thesis(thesis_id="t1", emoji="like", external_id="user_2")
+    csid.thesis_notifications(external_id="user_1")
+    csid.thesis_notifications(USER)
+    assert [(r.method, pq(r), json.loads(r.content) if r.content else None) for r in rec.requests] == [
+        ("GET", f"/v1/theses/eligibility?blockchain=solana&mint={MINT}&external_id=user_1", None),
+        ("POST", "/v1/theses?", {"blockchain": "solana", "mint": MINT, "body": "gm", "external_id": "user_1"}),
+        ("POST", "/v1/theses/replies?", {"thesis_id": "t1", "body": "Nice call", "external_id": "user_2"}),
+        ("POST", "/v1/theses/reactions?", {"thesis_id": "t1", "emoji": "like", "on": True, "external_id": "user_2"}),
+        ("GET", "/v1/theses/notifications?external_id=user_1", None),
+        ("GET", f"/v1/theses/notifications?csid_id={USER}", None),
+    ]
+    with pytest.raises(BadRequestError):
+        csid.post_thesis(blockchain="solana", mint=MINT, body="x", csid_id=USER, external_id="u")
+
+
+def test_history_mint_filter() -> None:
+    csid, rec = make(lambda r: ok({"trades": []}))
+    csid.history(blockchain="solana", address=MINT, mint="TokenMint1")
+    assert pq(rec.requests[0]) == f"/v1/wallets/history?blockchain=solana&address={MINT}&mint=TokenMint1"
+
+
 def test_validation() -> None:
     csid, rec = make(lambda r: ok({}))
     with pytest.raises(BadRequestError):

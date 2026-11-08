@@ -678,16 +678,25 @@ class _Endpoints:
         limit: int | None = None,
         cursor: str | None = None,
         scope: Scope | None = None,
+        mint: str | None = None,
     ) -> Any:
         """GET /v1/wallets/history — lifetime stats, token overview and one page
-        of trades (``limit`` 1-1000, default 500).
+        of trades (``limit`` 1-1000, default 500). ``mint``: only the trades of
+        this token (the stats then cover this token only).
 
         Returns :class:`~cabalspy_id.HistoryResponse`.
         """
         _wallet(blockchain, address)
         return self._get(
             "/wallets/history",
-            {"blockchain": blockchain, "address": address, "limit": limit, "cursor": cursor, "scope": scope},
+            {
+                "blockchain": blockchain,
+                "address": address,
+                "limit": limit,
+                "cursor": cursor,
+                "scope": scope,
+                "mint": mint,
+            },
         )
 
     def holdings(self, *, blockchain: Chain, address: str, scope: Scope | None = None) -> Any:
@@ -847,86 +856,112 @@ class _Endpoints:
             },
         )
 
-    def thesis_eligibility(self, *, blockchain: Chain, mint: str, csid_id: str) -> Any:
+    def thesis_eligibility(
+        self, *, blockchain: Chain, mint: str, csid_id: str | None = None, external_id: str | None = None
+    ) -> Any:
         """GET /v1/theses/eligibility — may this user post (holder, not paused) and reply here
         through your app? ``reason`` says why not (consent_required, plan_user_limit, sandbox_user).
 
         Returns :class:`~cabalspy_id.ThesisEligibility`.
         """
         _token(blockchain, mint)
-        _required(csid_id, "csid_id")
-        return self._get("/theses/eligibility", {"blockchain": blockchain, "mint": mint, "csid_id": csid_id})
+        return self._get("/theses/eligibility", {"blockchain": blockchain, "mint": mint, **_who(external_id, csid_id)})
 
     # Writing happens in the name of one of your users: ``csid_id`` is the ``sub``
-    # of their ID token. They must have signed in with the scope "thesis".
+    # of their ID token (they signed in with the scope "thesis"), or
+    # ``external_id`` for a platform user (white-label). Exactly one of them.
 
     def post_thesis(
-        self, *, blockchain: Chain, mint: str, body: str, csid_id: str, stance: ThesisStance | None = None
+        self,
+        *,
+        blockchain: Chain,
+        mint: str,
+        body: str,
+        csid_id: str | None = None,
+        external_id: str | None = None,
+        stance: ThesisStance | None = None,
     ) -> Any:
         """POST /v1/theses — posts a thesis (up to 1000 characters). Holders only (``not_a_holder``)."""
         _token(blockchain, mint)
         _required(body, "body")
-        _required(csid_id, "csid_id")
+        who = _who(external_id, csid_id)
         _one_of(stance, ("bull", "bear"), "stance")
-        payload: dict[str, Any] = {"blockchain": blockchain, "mint": mint, "body": body, "csid_id": csid_id}
+        payload: dict[str, Any] = {"blockchain": blockchain, "mint": mint, "body": body, **who}
         if stance:
             payload["stance"] = stance
         return self._post("/theses", payload)
 
-    def reply_to_thesis(self, *, thesis_id: str, body: str, csid_id: str) -> Any:
+    def reply_to_thesis(
+        self, *, thesis_id: str, body: str, csid_id: str | None = None, external_id: str | None = None
+    ) -> Any:
         """POST /v1/theses/replies — replies to a thesis."""
         _required(thesis_id, "thesis_id")
         _required(body, "body")
-        _required(csid_id, "csid_id")
-        return self._post("/theses/replies", {"thesis_id": thesis_id, "body": body, "csid_id": csid_id})
+        return self._post("/theses/replies", {"thesis_id": thesis_id, "body": body, **_who(external_id, csid_id)})
 
-    def react_to_thesis(self, *, thesis_id: str, emoji: ThesisEmoji, csid_id: str, on: bool = True) -> Any:
+    def react_to_thesis(
+        self,
+        *,
+        thesis_id: str,
+        emoji: ThesisEmoji,
+        csid_id: str | None = None,
+        external_id: str | None = None,
+        on: bool = True,
+    ) -> Any:
         """POST /v1/theses/reactions — adds (or with ``on=False`` removes) a reaction.
 
         Returns ``{"id", "reactions"}`` with the new counts.
         """
         _required(thesis_id, "thesis_id")
         _one_of(emoji, THESIS_EMOJIS, "emoji")
-        _required(csid_id, "csid_id")
-        return self._post("/theses/reactions", {"thesis_id": thesis_id, "emoji": emoji, "on": on, "csid_id": csid_id})
+        who = _who(external_id, csid_id)
+        return self._post("/theses/reactions", {"thesis_id": thesis_id, "emoji": emoji, "on": on, **who})
 
     def report_thesis(
-        self, *, thesis_id: str, reason: ThesisReportReason, csid_id: str, note: str | None = None
+        self,
+        *,
+        thesis_id: str,
+        reason: ThesisReportReason,
+        csid_id: str | None = None,
+        external_id: str | None = None,
+        note: str | None = None,
     ) -> Any:
         """POST /v1/theses/report — reports a post (hidden for review after 3 reports)."""
         _required(thesis_id, "thesis_id")
         _one_of(reason, THESIS_REPORT_REASONS, "reason")
-        _required(csid_id, "csid_id")
-        payload: dict[str, Any] = {"thesis_id": thesis_id, "reason": reason, "csid_id": csid_id}
+        payload: dict[str, Any] = {"thesis_id": thesis_id, "reason": reason, **_who(external_id, csid_id)}
         if note:
             payload["note"] = note
         return self._post("/theses/report", payload)
 
-    def thesis_notifications(self, csid_id: str) -> Any:
+    def thesis_notifications(self, csid_id: str | None = None, *, external_id: str | None = None) -> Any:
         """GET /v1/theses/notifications — moderation notifications of one of your users
         (warnings, hidden posts, pauses, appeal results), with the unread count.
 
         Returns :class:`~cabalspy_id.ThesisNotifications`.
         """
-        _required(csid_id, "csid_id")
-        return self._get("/theses/notifications", {"csid_id": csid_id})
+        return self._get("/theses/notifications", _who(external_id, csid_id))
 
-    def appeal_thesis_decision(self, csid_id: str, notification_id: int, message: str) -> Any:
+    def appeal_thesis_decision(
+        self,
+        csid_id: str | None = None,
+        notification_id: int | None = None,
+        message: str | None = None,
+        *,
+        external_id: str | None = None,
+    ) -> Any:
         """POST /v1/theses/appeal — appeals a moderation decision in the user's name
         (an ``appealable`` notification, within 30 days; message 10-1000 characters).
         """
-        _required(csid_id, "csid_id")
+        who = _who(external_id, csid_id)
         _required(notification_id, "notification_id")
         _required(message, "message")
-        return self._post(
-            "/theses/appeal", {"csid_id": csid_id, "notification_id": notification_id, "message": message}
-        )
+        return self._post("/theses/appeal", {**who, "notification_id": notification_id, "message": message})
 
-    def delete_thesis(self, *, thesis_id: str, csid_id: str) -> Any:
+    def delete_thesis(self, *, thesis_id: str, csid_id: str | None = None, external_id: str | None = None) -> Any:
         """POST /v1/theses/delete — deletes the user's own thesis or reply."""
         _required(thesis_id, "thesis_id")
-        _required(csid_id, "csid_id")
-        return self._post("/theses/delete", {"thesis_id": thesis_id, "csid_id": csid_id})
+        return self._post("/theses/delete", {"thesis_id": thesis_id, **_who(external_id, csid_id)})
 
     # ── white-label: platform users ──────────────────────────────────────
     # Your platform keeps its own login and addresses its users by its own user

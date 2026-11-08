@@ -312,6 +312,10 @@ class HistoryTrade(TypedDict):
     value: float
     value_usd: float
     currency: Currency
+    token_amount: float | None
+    """Tokens bought or sold."""
+    price_usd: float | None
+    """USD price per token at the trade (value_usd / token_amount)."""
     created_at: str
 
 
