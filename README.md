@@ -236,7 +236,7 @@ except RateLimitError as err:
 | `PermissionError` | 403 | `invalid_api_key`, `product_not_enabled`, `no_instance`, `scope_not_allowed`, `claim_disabled`, `feature_not_enabled`, `kol_only`, `not_a_holder`, `invalid_account`, `posting_paused`, `consent_required`, `sandbox_user`, `trading_private` |
 | `PlanUserLimitError` | 403 | `plan_user_limit` |
 | `NotFoundError` | 404 | `profile_not_found`, `wallet_not_found`, `instance_not_found`, `platform_user_not_found`, `verification_not_found`, `competition_not_found`, `callout_not_found`, `trader_not_found`, `not_in_trade_feed`, `not_found` |
-| `ConflictError` | 409 | `account_claimed`, `last_wallet`, `too_many_wallets`, `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`, `competition_closed`, `competition_full`, `late_join_closed`, `already_called`, `copy_managed_elsewhere`, `already_reported`, `trade_feed_full` |
+| `ConflictError` | 409 | `self_managed`, `already_linked`, `last_wallet`, `too_many_wallets`, `wallet_already_verified`, `kol_badge`, `x_required`, `kol_not_eligible`, `competition_limit`, `competition_closed`, `competition_full`, `late_join_closed`, `already_called`, `copy_managed_elsewhere`, `already_reported`, `trade_feed_full` |
 | `RateLimitError` | 429 | `rate_limit_exceeded`, `rate_limited` (also the Trade Feed's 120 changes per hour; not retried), `too_many_open_verifications`, `callout_cooldown` |
 | `ServerError` | 5xx | `internal_error`, `service_unavailable` |
 | `APIConnectionError` | – | network failure, timeout |
@@ -302,7 +302,7 @@ Every platform-users method that takes a user accepts the `external_id` position
 | `platform_settings()` / `update_platform_settings(...)` | `GET` / `POST /v1/platform-users/settings` |
 | `platform_inbound()` / `enable_platform_inbound()` / `disable_platform_inbound()` | `/v1/platform-users/inbound[/enable\|/disable]` |
 | `platform_user_session(external_id)` | `POST /v1/platform-users/session` (verify widget, 15 min) |
-| `platform_user_claim_link(external_id, return_url=)` | `POST /v1/platform-users/claim-link` |
+| ~~`platform_user_claim_link()`~~ | removed: 410 `claim_removed` (one CabalSpy ID per person, see below) |
 | `connect_platform_user_x(external_id, return_url=)` / `disconnect_platform_user_x(external_id)` | `POST /v1/platform-users/x/connect`, `/x/disconnect` |
 | `link_platform_user_telegram` / `platform_user_telegram` / `unlink_platform_user_telegram` | `/v1/platform-users/telegram[/link\|/unlink]` |
 | `platform_user_kol` / `request_platform_user_volume_check` / `apply_platform_user_kol` | `/v1/platform-users/kol[/volume-check\|/apply]` |
@@ -328,7 +328,9 @@ Individual competitions between your platform users, at most 5 scheduled + runni
 
 The competition routes page by `offset`; the `iter_*` helpers walk them until `pagination.total`.
 
-Webhooks: `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired`, and per instance `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (`PLATFORM_WEBHOOK_EVENTS`, `COMPETITION_WEBHOOK_EVENTS`).
+**One person, one CabalSpy ID.** You may create an account for your user, but the person owns it: when they connect X or Telegram, or verify a wallet, that their own CabalSpy ID already holds, your link moves there (`platform_user.merged` with the new `csid_id`; your `external_id` stays), and once they sign in themselves they manage profile, X and Telegram (`platform_user.self_managed`, `self_managed: True`). Wallets you report stay yours: other platforms do not see them.
+
+Webhooks: `platform_user.created`, `platform_user.merged`, `platform_user.self_managed`, `platform_user.x_connected`, `platform_user.telegram_linked`, `wallet.added`, `verification.expired`, and per instance `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (`PLATFORM_WEBHOOK_EVENTS`, `COMPETITION_WEBHOOK_EVENTS`).
 
 ## Callouts (on request)
 
@@ -667,7 +669,7 @@ The server sends a heartbeat every 30 seconds. The client reconnects with expone
 
 ## Webhooks
 
-Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.claimed`, `platform_user.x_connected`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`). Callouts add `callout.created`, `callout.milestone`, `callout.scored`, `callout.final` (`data.callout`; `CALLOUT_WEBHOOK_EVENTS`). Copy trading adds `copy_trade.instruction` (one per user and copied trade; `data` is the instruction plus `external_id`; `COPY_TRADING_WEBHOOK_EVENTS`). The Trade Feed adds `trade_feed.trade` and `trade_feed.thesis` (one per trade or thesis, not per user; `data` is the feed item plus `recipients` and `recipients_external`; `TradeFeedTradeEvent` / `TradeFeedThesisEvent`; `TRADE_FEED_WEBHOOK_EVENTS`).
+Deliveries follow the [Standard Webhooks](https://www.standardwebhooks.com) spec (`webhook-id`, `webhook-timestamp`, `webhook-signature`, secret `whsec_...`) and are retried for about 2 days. Events: `wallet.verified`, `wallet.removed`, `profile.updated`, `kol.granted`, `consent.revoked`, `thesis.created`, `thesis.reply`, `thesis.reaction` — only for users within the plan's limit. White-label adds `platform_user.created`, `platform_user.merged`, `platform_user.self_managed`, `platform_user.x_connected`, `platform_user.telegram_linked`, `wallet.added`, `verification.expired` and the instance-level `competition.started`, `competition.updated`, `competition.standings`, `competition.ended` (these carry `competition_id` instead of `sub`). Callouts add `callout.created`, `callout.milestone`, `callout.scored`, `callout.final` (`data.callout`; `CALLOUT_WEBHOOK_EVENTS`). Copy trading adds `copy_trade.instruction` (one per user and copied trade; `data` is the instruction plus `external_id`; `COPY_TRADING_WEBHOOK_EVENTS`). The Trade Feed adds `trade_feed.trade` and `trade_feed.thesis` (one per trade or thesis, not per user; `data` is the feed item plus `recipients` and `recipients_external`; `TradeFeedTradeEvent` / `TradeFeedThesisEvent`; `TRADE_FEED_WEBHOOK_EVENTS`).
 
 ```python
 from cabalspy_id import verify_webhook

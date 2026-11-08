@@ -375,7 +375,7 @@ def test_trade_feed_webhook_events() -> None:
 def test_exports() -> None:
     import cabalspy_id
 
-    assert cabalspy_id.__version__ == "0.9.1"
+    assert cabalspy_id.__version__ == "0.10.0"
     assert api.TradeFeedStream is cabalspy_id.TradeFeedStream
     assert cabalspy_id.TRADE_FEED_EVENTS == ("trade_feed.trade", "trade_feed.thesis")
     assert "ready" in cabalspy_id.TRADE_FEED_STREAM_EVENTS
